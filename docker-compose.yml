@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+  render-service:
+    build: .
+    ports:
+      - "8001:8001"
+    environment:
+      - API_KEY=dev-secret
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_S3_BUCKET=captionit-bucket
+      - AWS_REGION=ap-south-1
+      - AWS_ENDPOINT_URL=http://host.docker.internal:4566
+      - CALLBACK_HMAC_SECRET=dev-hmac-secret
+      - REMOTION_DIR=/app/remotion
+      - MAX_CONCURRENT_RENDERS=2
+      - MAX_QUEUE_SIZE=200
+      # Add REDIS_URL here to activate Layer 2:
+      # - REDIS_URL=redis://redis:6379/0
+
+  # Uncomment when scaling to Layer 2:
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
