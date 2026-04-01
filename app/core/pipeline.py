@@ -139,7 +139,7 @@ async def run_pipeline(
                     f"--props={props_path}",
                     "--codec=h264",
                     "--crf=18",
-                    "--concurrency=4",
+                    "--concurrency=8",
                     "--timeout=120000",
                     "--log=verbose",
                     "--chromium-flags=--no-sandbox --disable-dev-shm-usage",
