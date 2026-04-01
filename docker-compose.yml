@@ -2,10 +2,23 @@ version: "3.9"
 services:
   render-service:
     build: .
+    container_name: captionit-render
     ports:
-      - "${PORT:-8001}:${PORT:-8001}"
-    env_file:
-      - .env
+      - "8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
+      - PORT=${PORT:-8001}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - API_KEY=${API_KEY}
+      - MAX_CONCURRENT_RENDERS=${MAX_CONCURRENT_RENDERS:-2}
+      - MAX_QUEUE_SIZE=${MAX_QUEUE_SIZE:-200}
+      - REDIS_URL=${REDIS_URL}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - AWS_REGION=${AWS_REGION:-ap-south-1}
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-}
+      - CALLBACK_HMAC_SECRET=${CALLBACK_HMAC_SECRET}
       - REMOTION_DIR=/app/remotion
     restart: unless-stopped
