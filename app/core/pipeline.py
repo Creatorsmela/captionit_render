@@ -142,6 +142,8 @@ async def run_pipeline(
                     "--concurrency=4",
                     "--timeout=120000",
                     "--log=verbose",
+                    "--chromium-flags=--no-sandbox --disable-dev-shm-usage",
+                    "--gl=swiftshader",
                 ],
                 cwd=settings.remotion_dir,
                 capture_output=True,
