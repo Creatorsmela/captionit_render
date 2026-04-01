@@ -1,6 +1,11 @@
-import React, { CSSProperties } from 'react';
-import { CaptionStyles, WordWithStyle } from '../types';
-import { buildCaptionTextStyle, buildWordStyle, splitIntoLines, getHighlightMode } from '../utils/captionStyles';
+import React, { CSSProperties } from "react";
+import { CaptionStyles, WordWithStyle } from "../types/captionTypes";
+import {
+  buildCaptionTextStyle,
+  buildWordStyle,
+  splitIntoLines,
+  getHighlightMode,
+} from "../utils/captionStyles";
 
 interface Props {
   words: WordWithStyle[];
@@ -11,24 +16,19 @@ interface Props {
 }
 
 export const CaptionTextContent: React.FC<Props> = ({
-  words, activeWordId, renderMode, styles, highlightColor
+  words,
+  activeWordId,
+  renderMode,
+  styles,
+  highlightColor,
 }) => {
   const highlightMode = getHighlightMode(styles);
-  const baseStyle = buildCaptionTextStyle(styles);
+  // captionTextStyle is the base — mirrors the parent <span style={captionTextStyle}> in frontend
+  const captionTextStyle = buildCaptionTextStyle(styles);
   const maxPerLine = styles.max_words_per_line ?? 5;
 
-  // ── key-word-spotlight layout ────────────────────────────────────
-  // Verified against:
-  //   frontend  → CaptionTextContent.tsx (lines 42-106)
-  //   renderer  → canvas_renderer.py _render_keyword_spotlight_frame() (lines 779-895)
-  //
-  // Three rules that must be exact:
-  //   1. Alignment: key=center, supporting-before-first-key=left, supporting-after=right
-  //   2. Run-level visibility: hide entire run if ALL its words are unspoken
-  //      (not word-level hide) — prevents layout shift when first word of run appears
-  //   3. activeWordId is NOT used here — spotlight is driven purely by is_key_word flag
-  if (renderMode === 'key-word-spotlight') {
-    // Build runs of consecutive words with same is_key_word status
+  // ── key-word-spotlight ───────────────────────────────────────────
+  if (renderMode === "key-word-spotlight") {
     const runs: { isKey: boolean; words: WordWithStyle[] }[] = [];
     for (const word of words) {
       const isKey = word.style?.is_key_word === true;
@@ -39,52 +39,48 @@ export const CaptionTextContent: React.FC<Props> = ({
         runs.push({ isKey, words: [word] });
       }
     }
-
-    // Index of first key run — determines left/right alignment of supporting runs
-    const firstKeyIdx = runs.findIndex(r => r.isKey);
+    const firstKeyIdx = runs.findIndex((r) => r.isKey);
 
     return (
-      <div style={{ textAlign: 'center' }}>
+      <div style={{ textAlign: "center" }}>
         {runs.map((run, ri) => {
-          // Hide entire run if ALL its words are unspoken (matches canvas renderer logic)
-          // Individual word-level hidden is NOT used here — whole run appears at once
-          const runHidden = run.words.every(w => w.hidden);
-
-          // Alignment mirrors frontend exactly:
-          //   key word run     → center
-          //   supporting before first key → left
-          //   supporting after first key  → right
-          const align: CSSProperties['textAlign'] = run.isKey
-            ? 'center'
-            : ri < firstKeyIdx ? 'left' : 'right';
+          const runHidden = run.words.every((w) => w.hidden);
+          const align: CSSProperties["textAlign"] = run.isKey
+            ? "center"
+            : ri < firstKeyIdx
+              ? "left"
+              : "right";
 
           return (
-            <span key={ri} style={{
-              display: 'block',
-              textAlign: align,
-              visibility: runHidden ? 'hidden' : 'visible',
-            }}>
+            <span
+              key={ri}
+              style={{
+                display: "block",
+                textAlign: align,
+                visibility: runHidden ? "hidden" : "visible",
+              }}
+            >
               {run.words.map((w, wi) => {
-                const style: CSSProperties = run.isKey
+                // Exact mirror of frontend CaptionTextContent key-word-spotlight
+                const base = buildWordStyle(w.style, captionTextStyle, styles);
+                const override: CSSProperties = run.isKey
                   ? {
-                      ...baseStyle,
-                      fontSize: `${(styles.font_size ?? 24) * 2}px`,
+                      fontSize: "2em",
+                      color: highlightColor || "#C8FF00",
                       fontWeight: 900,
-                      color: highlightColor,
-                      textTransform: 'uppercase',
+                      textTransform: "uppercase",
                       lineHeight: 1.1,
-                      display: 'inline-block',
+                      display: "inline-block",
                     }
                   : {
-                      ...baseStyle,
-                      fontSize: `${(styles.font_size ?? 24) * 0.72}px`,
+                      fontSize: "0.72em",
                       opacity: 0.85,
-                      // word-level visibility still needed for words within a partially-spoken run
-                      visibility: w.hidden ? 'hidden' : 'visible',
+                      visibility: w.hidden ? "hidden" : "visible",
                     };
                 return (
-                  <span key={wi} style={style}>
-                    {w.text}{wi < run.words.length - 1 ? ' ' : ''}
+                  <span key={`${w.wordIndex}-${wi}`}>
+                    <span style={{ ...base, ...override }}>{w.text}</span>
+                    {wi < run.words.length - 1 ? " " : ""}
                   </span>
                 );
               })}
@@ -95,42 +91,51 @@ export const CaptionTextContent: React.FC<Props> = ({
     );
   }
 
-  // ── All other modes: line-by-line layout ─────────────────────────
+  // ── All other modes: line-by-line ────────────────────────────────
   const lines = splitIntoLines(words, maxPerLine);
 
   return (
-    <div style={{ textAlign: (styles.text_align as any) ?? 'center' }}>
+    <div style={{ textAlign: (styles.text_align as CSSProperties["textAlign"]) ?? "center" }}>
       {lines.map((line, li) => (
-        <div key={li} style={{ display: 'block' }}>
+        <span key={li} style={{ display: "block", whiteSpace: "nowrap" }}>
           {line.map((w, wi) => {
-            const isActive = activeWordId === w.wordIndex;
+            const isActive =
+              (renderMode === "word-highlight" ||
+                renderMode === "karaoke" ||
+                renderMode === "progressive") &&
+              activeWordId != null &&
+              w.wordIndex === activeWordId;
 
-            let wordStyle: CSSProperties = buildWordStyle(w.style, baseStyle);
+            // buildWordStyle returns only word-level overrides, inheriting from captionTextStyle
+            const base = buildWordStyle(w.style, captionTextStyle, styles);
+            const activeOverride: CSSProperties =
+              isActive && highlightColor
+                ? highlightMode === "bubble"
+                  ? {
+                      backgroundColor: highlightColor,
+                      borderRadius: "4px",
+                      padding: "2px 8px",
+                      boxDecorationBreak: "clone",
+                      WebkitBoxDecorationBreak: "clone" as any,
+                    }
+                  : { color: highlightColor }
+                : {};
 
-            if (isActive) {
-              if (highlightMode === 'bubble') {
-                wordStyle = {
-                  ...wordStyle,
-                  backgroundColor: highlightColor,
-                  borderRadius: '4px',
-                  padding: '2px 8px',
-                  boxDecorationBreak: 'clone',
-                  WebkitBoxDecorationBreak: 'clone',
-                };
-              } else {
-                wordStyle = { ...wordStyle, color: highlightColor };
-              }
-            }
-
-            if (w.hidden) {
-              wordStyle = { ...wordStyle, visibility: 'hidden' };
-            }
+            const hiddenOverride: CSSProperties = w.hidden
+              ? { visibility: "hidden" }
+              : {};
 
             return (
-              <span key={wi} style={wordStyle}>{w.text} </span>
+              <span
+                key={`${w.wordIndex}-${wi}`}
+                style={{ ...base, ...activeOverride, ...hiddenOverride }}
+              >
+                {w.text}
+                {wi < line.length - 1 ? " " : ""}
+              </span>
             );
           })}
-        </div>
+        </span>
       ))}
     </div>
   );

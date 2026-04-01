@@ -17,6 +17,7 @@ class RenderRequest(BaseModel):
     caption_data:    dict          # full caption payload from /render-payload
     callback_url:    str           # POST destination when done
     callback_secret: str | None = None
+    max_height:      int | None = None  # downscale to this height before rendering (e.g. 1080, 720)
 
 
 class RenderJob(BaseModel):
