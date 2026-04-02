@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+import boto3
 import httpx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
@@ -39,21 +40,25 @@ def _remotion_bucket(settings) -> str:
 
 async def _get_render_progress(render_id: str, bucket: str, settings) -> dict | None:
     """
-    Fetch Remotion's progress.json from S3.
+    Fetch Remotion's progress.json from S3 via boto3.
     Returns None if not yet written (render still starting up).
     """
     key = f"renders/{render_id}/progress.json"
-    url = f"https://{bucket}.s3.{settings.remotion_lambda_region}.amazonaws.com/{key}"
-    headers = _sign_request("GET", url, settings, "s3")
-
+    loop = asyncio.get_running_loop()
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            return resp.json()
-    except Exception:
+        s3 = boto3.client(
+            "s3",
+            region_name=settings.remotion_lambda_region,
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+        )
+        response = await loop.run_in_executor(
+            None, lambda: s3.get_object(Bucket=bucket, Key=key)
+        )
+        return json.loads(response["Body"].read())
+    except Exception as e:
+        if "NoSuchKey" in str(e) or "404" in str(e):
+            return None
         return None
 
 
@@ -76,6 +81,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
 
     lambda_payload = {
         "type": "start",
+        "version": "4.0.443",
         "renderId": render_id,
         "serveUrl": settings.remotion_lambda_serve_url,
         "composition": "CaptionVideo",
@@ -85,9 +91,11 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "maxRetries": 1,
         "framesPerLambda": settings.remotion_lambda_frames_per_lambda,
         "privacy": "private",
-        "outName": f"renders/{request.project_id}/final.mp4",
-        "s3OutputBucket": settings.aws_s3_bucket,
-        "s3OutputRegion": settings.aws_region,
+        "outName": {
+            "key": f"renders/{request.project_id}/final.mp4",
+            "bucketName": settings.aws_s3_bucket,
+            "region": settings.aws_region,
+        },
     }
 
     payload_bytes = json.dumps(lambda_payload).encode()
