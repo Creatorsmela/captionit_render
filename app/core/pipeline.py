@@ -1,9 +1,12 @@
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import math
+import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from botocore.auth import SigV4Auth
@@ -16,13 +19,55 @@ from app.core.video import probe_video
 logger = logging.getLogger(__name__)
 
 
+def _sign_request(method: str, url: str, settings, service: str, body: bytes = b"") -> dict:
+    """Return signed headers for an AWS request using SigV4."""
+    credentials = Credentials(
+        access_key=settings.aws_access_key_id,
+        secret_key=settings.aws_secret_access_key,
+    )
+    aws_request = AWSRequest(method=method, url=url, data=body)
+    SigV4Auth(credentials, service, settings.remotion_lambda_region).add_auth(aws_request)
+    return dict(aws_request.headers)
+
+
+def _remotion_bucket(settings) -> str:
+    """Extract Remotion Lambda bucket name from serve URL."""
+    # e.g. https://remotionlambda-apsouth1-ysxu1xtptu.s3.ap-south-1.amazonaws.com/sites/...
+    hostname = urlparse(settings.remotion_lambda_serve_url).hostname
+    return hostname.split(".")[0]
+
+
+async def _get_render_progress(render_id: str, bucket: str, settings) -> dict | None:
+    """
+    Fetch Remotion's progress.json from S3.
+    Returns None if not yet written (render still starting up).
+    """
+    key = f"renders/{render_id}/progress.json"
+    url = f"https://{bucket}.s3.{settings.remotion_lambda_region}.amazonaws.com/{key}"
+    headers = _sign_request("GET", url, settings, "s3")
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return None
+
+
 async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, settings) -> str:
     """
-    Invoke Remotion Lambda via httpx + SigV4 signing.
-    Truly async — no run_in_executor, proper 900s timeout.
-    Lambda renders + uploads to S3 itself — returns the S3 key.
+    Invoke Remotion Lambda asynchronously (fire and poll).
+    1. Lambda invoked with Event type — returns 202 immediately.
+    2. Poll Remotion's progress.json in S3 every 5s for real-time progress.
+    3. Return S3 key when done.
     """
-    logger.info(f"[{job_id}] Invoking Remotion Lambda — function={settings.remotion_lambda_function_name}")
+    render_id = uuid.uuid4().hex[:21]
+    bucket = _remotion_bucket(settings)
+
+    logger.info(f"[{job_id}] Invoking Remotion Lambda — function={settings.remotion_lambda_function_name} render_id={render_id}")
 
     url = (
         f"https://lambda.{settings.remotion_lambda_region}.amazonaws.com"
@@ -31,6 +76,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
 
     lambda_payload = {
         "type": "start",
+        "renderId": render_id,
         "serveUrl": settings.remotion_lambda_serve_url,
         "composition": "CaptionVideo",
         "inputProps": props,
@@ -45,43 +91,44 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
     }
 
     payload_bytes = json.dumps(lambda_payload).encode()
+    headers = _sign_request("POST", url, settings, "lambda", payload_bytes)
+    # Async invocation — Lambda runs in background, we get 202 immediately
+    headers["X-Amz-Invocation-Type"] = "Event"
 
-    # Sign request with AWS SigV4 using botocore (no boto3 client needed)
-    credentials = Credentials(
-        access_key=settings.aws_access_key_id,
-        secret_key=settings.aws_secret_access_key,
-    )
-    aws_request = AWSRequest(method="POST", url=url, data=payload_bytes)
-    SigV4Auth(credentials, "lambda", settings.remotion_lambda_region).add_auth(aws_request)
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(url, content=payload_bytes, headers=headers)
+        if resp.status_code != 202:
+            raise RuntimeError(f"Lambda invocation failed: HTTP {resp.status_code} — {resp.text}")
 
-    async with httpx.AsyncClient(timeout=900) as client:
-        resp = await client.post(
-            url,
-            content=payload_bytes,
-            headers=dict(aws_request.headers),
-        )
-        resp.raise_for_status()
+    logger.info(f"[{job_id}] Lambda invoked async — polling progress every 5s (bucket={bucket})")
 
-    # Lambda execution errors come back as 200 with this header set
-    if resp.headers.get("x-amz-function-error"):
-        raise RuntimeError(f"Lambda execution error: {resp.text}")
+    # Poll S3 progress.json — max 15 min (180 × 5s)
+    for attempt in range(180):
+        await asyncio.sleep(5)
 
-    try:
-        result_payload = resp.json()
-    except Exception:
-        raise RuntimeError(f"Lambda returned invalid JSON: {resp.text[:500]}")
+        progress = await _get_render_progress(render_id, bucket, settings)
 
-    logger.info(f"[{job_id}] Lambda response type={result_payload.get('type')}")
+        if progress is None:
+            logger.info(f"[{job_id}] [{attempt * 5}s] Waiting for Lambda to start...")
+            continue
 
-    if result_payload.get("type") == "error":
-        raise RuntimeError(f"Lambda render failed: {result_payload.get('message')}")
+        if progress.get("fatalErrorEncountered"):
+            errors = progress.get("errors", [])
+            msg = errors[0].get("message", "unknown") if errors else "unknown"
+            raise RuntimeError(f"Lambda render failed: {msg}")
 
-    s3_key = result_payload.get("outputFile")
-    if not s3_key:
-        raise RuntimeError(f"Lambda succeeded but returned no outputFile. Response: {result_payload}")
+        pct = int(progress.get("overallProgress", 0) * 100)
+        chunks = progress.get("chunks", 0)
+        lambdas = progress.get("lambdasInvoked", 0)
+        frames = progress.get("frames", 0)
+        logger.info(f"[{job_id}] [{attempt * 5}s] Rendering {pct}% — {frames} frames, {chunks} chunks, {lambdas} lambdas")
 
-    logger.info(f"[{job_id}] Lambda render complete — s3_key={s3_key}")
-    return s3_key
+        if progress.get("done"):
+            s3_key = progress.get("outputFile") or f"renders/{request.project_id}/final.mp4"
+            logger.info(f"[{job_id}] Lambda render complete — s3_key={s3_key}")
+            return s3_key
+
+    raise RuntimeError(f"Lambda render timed out after 15 minutes — render_id={render_id}")
 
 
 async def run_pipeline(
@@ -114,7 +161,7 @@ async def run_pipeline(
         }
         logger.info(f"[{job_id}] Props built ({len(props['captions'])} words, {len(props['segments'])} segments)")
 
-        # 3. Invoke Remotion Lambda
+        # 3. Invoke Remotion Lambda (async + poll)
         s3_key = await _render_with_lambda(job_id, request, props, settings)
 
         # 4. Update job + fire callback
