@@ -92,11 +92,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "maxRetries": 1,
         "framesPerLambda": settings.remotion_lambda_frames_per_lambda,
         "privacy": "private",
-        "outName": {
-            "key": f"renders/{request.project_id}/final.mp4",
-            "bucketName": settings.aws_s3_bucket,
-            "region": settings.aws_region,
-        },
+        "outName": f"renders/{request.project_id}/final.mp4",
     }
 
     payload_bytes = json.dumps(lambda_payload).encode()
