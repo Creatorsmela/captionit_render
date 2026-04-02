@@ -117,8 +117,8 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
 
     logger.info(f"[{job_id}] Polling progress every 5s (bucket={bucket}, render_id={render_id})")
 
-    # Poll S3 progress.json — max 15 min (180 × 5s)
-    for attempt in range(180):
+    # Poll S3 progress.json — max 5 min (60 × 5s)
+    for attempt in range(60):
         await asyncio.sleep(5)
 
         progress = await _get_render_progress(render_id, bucket, settings)
@@ -143,7 +143,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
             logger.info(f"[{job_id}] Lambda render complete — s3_key={s3_key}")
             return s3_key
 
-    raise RuntimeError(f"Lambda render timed out after 15 minutes — render_id={render_id}")
+    raise RuntimeError(f"Lambda render timed out after 5 minutes — render_id={render_id}")
 
 
 async def run_pipeline(
