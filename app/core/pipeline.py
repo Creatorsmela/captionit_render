@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import hmac
 import json
@@ -6,37 +5,29 @@ import logging
 import math
 from datetime import datetime, timezone
 
-import boto3
 import httpx
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 
 from app.models.schemas import RenderRequest
 from app.core.video import probe_video
 
 logger = logging.getLogger(__name__)
 
-# Module-level singleton — boto3 clients are thread-safe, reuse across renders
-_lambda_client = None
-
-def _get_lambda_client(settings):
-    global _lambda_client
-    if _lambda_client is None:
-        _lambda_client = boto3.client(
-            "lambda",
-            region_name=settings.remotion_lambda_region,
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
-        )
-    return _lambda_client
-
 
 async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, settings) -> str:
     """
-    Invoke Remotion Lambda synchronously.
+    Invoke Remotion Lambda via httpx + SigV4 signing.
+    Truly async — no run_in_executor, proper 900s timeout.
     Lambda renders + uploads to S3 itself — returns the S3 key.
     """
     logger.info(f"[{job_id}] Invoking Remotion Lambda — function={settings.remotion_lambda_function_name}")
 
-    lambda_client = _get_lambda_client(settings)
+    url = (
+        f"https://lambda.{settings.remotion_lambda_region}.amazonaws.com"
+        f"/2015-03-31/functions/{settings.remotion_lambda_function_name}/invocations"
+    )
 
     lambda_payload = {
         "type": "start",
@@ -53,24 +44,42 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "s3OutputRegion": settings.aws_region,
     }
 
-    # Run blocking boto3 call in thread pool so we don't block the event loop
-    loop = asyncio.get_running_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: lambda_client.invoke(
-            FunctionName=settings.remotion_lambda_function_name,
-            InvocationType="RequestResponse",
-            Payload=json.dumps(lambda_payload).encode(),
-        ),
-    )
+    payload_bytes = json.dumps(lambda_payload).encode()
 
-    result_payload = json.loads(response["Payload"].read())
+    # Sign request with AWS SigV4 using botocore (no boto3 client needed)
+    credentials = Credentials(
+        access_key=settings.aws_access_key_id,
+        secret_key=settings.aws_secret_access_key,
+    )
+    aws_request = AWSRequest(method="POST", url=url, data=payload_bytes)
+    SigV4Auth(credentials, "lambda", settings.remotion_lambda_region).add_auth(aws_request)
+
+    async with httpx.AsyncClient(timeout=900) as client:
+        resp = await client.post(
+            url,
+            content=payload_bytes,
+            headers=dict(aws_request.headers),
+        )
+        resp.raise_for_status()
+
+    # Lambda execution errors come back as 200 with this header set
+    if resp.headers.get("x-amz-function-error"):
+        raise RuntimeError(f"Lambda execution error: {resp.text}")
+
+    try:
+        result_payload = resp.json()
+    except Exception:
+        raise RuntimeError(f"Lambda returned invalid JSON: {resp.text[:500]}")
+
     logger.info(f"[{job_id}] Lambda response type={result_payload.get('type')}")
 
     if result_payload.get("type") == "error":
         raise RuntimeError(f"Lambda render failed: {result_payload.get('message')}")
 
-    s3_key = result_payload["outputFile"]
+    s3_key = result_payload.get("outputFile")
+    if not s3_key:
+        raise RuntimeError(f"Lambda succeeded but returned no outputFile. Response: {result_payload}")
+
     logger.info(f"[{job_id}] Lambda render complete — s3_key={s3_key}")
     return s3_key
 
@@ -89,7 +98,7 @@ async def run_pipeline(
         width, height, fps, duration = probe_video(request.video_url)
         logger.info(f"[{job_id}] Probed: {width}x{height} @ {fps:.3f}fps, {duration:.1f}s")
 
-        # 3. Build props — Lambda fetches video directly from presigned URL
+        # 2. Build props — Lambda fetches video directly from presigned URL
         caption_data = request.caption_data
         props = {
             "videoSrc": request.video_url,
@@ -105,10 +114,10 @@ async def run_pipeline(
         }
         logger.info(f"[{job_id}] Props built ({len(props['captions'])} words, {len(props['segments'])} segments)")
 
-        # 4. Invoke Remotion Lambda
+        # 3. Invoke Remotion Lambda
         s3_key = await _render_with_lambda(job_id, request, props, settings)
 
-        # 5. Update job + fire callback
+        # 4. Update job + fire callback
         update_fn(job_id, {
             "status": "success",
             "completed_at": datetime.now(timezone.utc),
@@ -126,7 +135,6 @@ async def run_pipeline(
         })
         await _fire_callback(request, job_id, None, None, settings, error=str(e))
         raise
-
 
 
 async def _fire_callback(request, job_id, s3_key, file_size, settings, error=None):
