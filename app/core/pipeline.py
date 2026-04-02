@@ -65,10 +65,9 @@ async def _get_render_progress(render_id: str, bucket: str, settings) -> dict | 
 
 async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, settings) -> str:
     """
-    Invoke Remotion Lambda asynchronously (fire and poll).
-    1. Lambda invoked with Event type — returns 202 immediately.
-    2. Poll Remotion's progress.json in S3 every 5s for real-time progress.
-    3. Return S3 key when done.
+    Invoke Remotion Lambda synchronously to get back the actual renderId,
+    then poll progress.json in S3 every 5s.
+    The 'start' handler returns in <1s after spawning child Lambdas.
     """
     render_id = uuid.uuid4().hex[:21]
     bucket = _remotion_bucket(settings)
@@ -84,6 +83,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "type": "start",
         "version": "4.0.443",
         "renderId": render_id,
+        "bucketName": bucket,
         "serveUrl": settings.remotion_lambda_serve_url,
         "composition": "CaptionVideo",
         "inputProps": props,
@@ -101,15 +101,25 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
 
     payload_bytes = json.dumps(lambda_payload).encode()
     headers = _sign_request("POST", url, settings, "lambda", payload_bytes)
-    # Async invocation — Lambda runs in background, we get 202 immediately
-    headers["X-Amz-Invocation-Type"] = "Event"
+    # Sync invocation — 'start' handler returns in <1s with the actual renderId
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(url, content=payload_bytes, headers=headers)
-        if resp.status_code != 202:
+        if resp.status_code not in (200, 202):
             raise RuntimeError(f"Lambda invocation failed: HTTP {resp.status_code} — {resp.text}")
+        try:
+            resp_data = resp.json()
+            actual_id = resp_data.get("renderId")
+            actual_bucket = resp_data.get("bucketName")
+            if actual_id:
+                logger.info(f"[{job_id}] Lambda accepted render — actual renderId={actual_id} (requested={render_id})")
+                render_id = actual_id
+            if actual_bucket:
+                bucket = actual_bucket
+        except Exception:
+            pass  # no JSON body (202 async fallback), use our render_id
 
-    logger.info(f"[{job_id}] Lambda invoked async — polling progress every 5s (bucket={bucket})")
+    logger.info(f"[{job_id}] Polling progress every 5s (bucket={bucket}, render_id={render_id})")
 
     # Poll S3 progress.json — max 15 min (180 × 5s)
     for attempt in range(180):
