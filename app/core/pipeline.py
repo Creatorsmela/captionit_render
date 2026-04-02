@@ -39,6 +39,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
     lambda_client = _get_lambda_client(settings)
 
     lambda_payload = {
+        "type": "start",
         "serveUrl": settings.remotion_lambda_serve_url,
         "composition": "CaptionVideo",
         "inputProps": props,
