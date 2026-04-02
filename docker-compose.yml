@@ -5,7 +5,6 @@ services:
     container_name: captionit-render
     ports:
       - "8001:8001"
-    shm_size: '6gb'
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -21,5 +20,7 @@ services:
       - AWS_REGION=${AWS_REGION:-ap-south-1}
       - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-}
       - CALLBACK_HMAC_SECRET=${CALLBACK_HMAC_SECRET}
-      - REMOTION_DIR=/app/remotion
+      - REMOTION_LAMBDA_FUNCTION_NAME=${REMOTION_LAMBDA_FUNCTION_NAME}
+      - REMOTION_LAMBDA_SERVE_URL=${REMOTION_LAMBDA_SERVE_URL}
+      - REMOTION_LAMBDA_REGION=${REMOTION_LAMBDA_REGION:-ap-south-1}
     restart: unless-stopped

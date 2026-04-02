@@ -1,4 +1,3 @@
-import os
 from functools import lru_cache
 from pydantic_settings import BaseSettings
 
@@ -25,8 +24,11 @@ class Settings(BaseSettings):
     # HMAC — shared with captionit-backend for callback verification
     callback_hmac_secret: str = ""
 
-    # Remotion project path
-    remotion_dir: str = ""               # absolute path to captionit-render/remotion/
+    # Remotion Lambda
+    remotion_lambda_function_name: str = ""            # e.g. remotion-render-3-3-96-mem3009mb-disk2048mb-900sec
+    remotion_lambda_serve_url: str = ""                # S3 site URL from: npx remotion lambda sites create
+    remotion_lambda_region: str = "ap-south-1"
+    remotion_lambda_frames_per_lambda: int = 20
 
     class Config:
         env_file = ".env"

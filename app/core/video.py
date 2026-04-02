@@ -41,29 +41,3 @@ def probe_video(path: str) -> tuple[int, int, float, float]:
         logger.info(f"Rotation {rotation}° — swapped to {width}x{height}")
 
     return width, height, fps, duration
-
-
-def pre_transcode(input_path: str, output_path: str, max_dim: int = 1920) -> tuple[int, int]:
-    """
-    Downscale to max_dim on long side. Returns (new_width, new_height).
-    Only called when max(width, height) > 1920 (4K source).
-    """
-    w, h, _, _ = probe_video(input_path)
-    scale = max_dim / max(w, h)
-    tw = int(w * scale) - int(w * scale) % 2
-    th = int(h * scale) - int(h * scale) % 2
-
-    result = subprocess.run([
-        "ffmpeg", "-y", "-i", input_path,
-        "-vf", f"scale={tw}:{th}",
-        "-c:v", "libx264", "-crf", "18", "-preset", "ultrafast",
-        "-c:a", "copy",
-        "-metadata:s:v:0", "rotate=0",   # clear rotation tag
-        output_path,
-    ], capture_output=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Pre-transcode failed: {result.stderr.decode(errors='replace')}")
-
-    logger.info(f"Pre-transcode {w}x{h} → {tw}x{th}")
-    return tw, th
