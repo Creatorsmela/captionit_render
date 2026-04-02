@@ -59,6 +59,7 @@ async def _get_render_progress(render_id: str, bucket: str, settings) -> dict | 
     except Exception as e:
         if "NoSuchKey" in str(e) or "404" in str(e):
             return None
+        logger.warning(f"S3 progress poll error (render_id={render_id}, bucket={bucket}): {type(e).__name__}: {e}")
         return None
 
 
