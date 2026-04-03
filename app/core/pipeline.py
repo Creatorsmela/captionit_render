@@ -97,9 +97,12 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
     Invoke Remotion Lambda using the Node.js SDK wrapper.
     The SDK handles all props serialization/deserialization automatically.
     """
-    bucket = _remotion_bucket(settings)
+    # Progress polling uses the Remotion serve bucket
+    progress_bucket = _remotion_bucket(settings)
+    # Output bucket is the actual S3 bucket for rendered videos
+    output_bucket = settings.aws_s3_bucket
     logger.info(f"[{job_id}] Invoking Remotion Lambda via SDK wrapper")
-    logger.info(f"[{job_id}] function={settings.remotion_lambda_function_name}, bucket={bucket}")
+    logger.info(f"[{job_id}] function={settings.remotion_lambda_function_name}, output_bucket={output_bucket}, progress_bucket={progress_bucket}")
 
     # Build payload for Node.js wrapper
     lambda_payload = {
@@ -113,7 +116,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "framesPerLambda": settings.remotion_lambda_frames_per_lambda,
         "privacy": "private",
         "outName": f"renders/{request.project_id}/final.mp4",
-        "s3OutputBucket": bucket,
+        "s3OutputBucket": output_bucket,
         "s3OutputRegion": settings.remotion_lambda_region,
         "region": settings.remotion_lambda_region,
     }
@@ -168,7 +171,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
             raise RuntimeError("Lambda returned no renderId")
 
         logger.info(f"[{job_id}] ✅ Lambda accepted render — renderId={render_id}")
-        logger.info(f"[{job_id}] Starting progress polling (bucket={bucket}, render_id={render_id})")
+        logger.info(f"[{job_id}] Starting progress polling (bucket={progress_bucket}, render_id={render_id})")
 
     finally:
         # Cleanup temp file
@@ -181,7 +184,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
     for attempt in range(120):
         await asyncio.sleep(5)
 
-        progress = await _get_render_progress(render_id, bucket, settings)
+        progress = await _get_render_progress(render_id, progress_bucket, settings)
 
         if progress is None:
             logger.info(f"[{job_id}] [{attempt * 5}s] Waiting for Lambda to start (attempt {attempt + 1}/60)...")
@@ -208,7 +211,7 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
             return s3_key
 
     logger.error(f"[{job_id}] ⏱️ TIMEOUT: Lambda render timed out after 10 minutes")
-    logger.error(f"[{job_id}] render_id={render_id}, bucket={bucket}")
+    logger.error(f"[{job_id}] render_id={render_id}, progress_bucket={progress_bucket}")
     raise RuntimeError(f"Lambda render timed out after 10 minutes — render_id={render_id}")
 
 
