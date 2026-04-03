@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,8 +9,16 @@ from app.core.job_queue import get_queue
 from app.core.workers import start_workers
 from app.api.routes.jobs import router as jobs_router
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# Debug logging based on ENVIRONMENT setting
+environment = os.getenv("ENVIRONMENT", "production")
+log_level = logging.DEBUG if environment == "development" else logging.INFO
+
+logging.basicConfig(
+    level=log_level,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s"
+)
 logger = logging.getLogger(__name__)
+logger.info(f"Logging level: {logging.getLevelName(log_level)}")
 
 
 @asynccontextmanager

@@ -4,15 +4,14 @@ import hmac
 import json
 import logging
 import math
-import uuid
+import subprocess
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlparse
 
 import boto3
 import httpx
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
-from botocore.credentials import Credentials
 
 from app.models.schemas import RenderRequest
 from app.core.video import probe_video
@@ -20,22 +19,28 @@ from app.core.video import probe_video
 logger = logging.getLogger(__name__)
 
 
-def _sign_request(method: str, url: str, settings, service: str, body: bytes = b"") -> dict:
-    """Return signed headers for an AWS request using SigV4."""
-    credentials = Credentials(
-        access_key=settings.aws_access_key_id,
-        secret_key=settings.aws_secret_access_key,
-    )
-    aws_request = AWSRequest(method=method, url=url, data=body)
-    SigV4Auth(credentials, service, settings.remotion_lambda_region).add_auth(aws_request)
-    return dict(aws_request.headers)
-
-
 def _remotion_bucket(settings) -> str:
     """Extract Remotion Lambda bucket name from serve URL."""
+    # 🔴 Problem Area 1: bucket = _remotion_bucket(settings)
+    logger.debug(f"_remotion_bucket: REMOTION_LAMBDA_SERVE_URL={settings.remotion_lambda_serve_url}")
+
+    if not settings.remotion_lambda_serve_url:
+        logger.error("ERROR: REMOTION_LAMBDA_SERVE_URL is not configured!")
+        raise ValueError("REMOTION_LAMBDA_SERVE_URL not set")
+
     # e.g. https://remotionlambda-apsouth1-ysxu1xtptu.s3.ap-south-1.amazonaws.com/sites/...
-    hostname = urlparse(settings.remotion_lambda_serve_url).hostname
-    return hostname.split(".")[0]
+    parsed_url = urlparse(settings.remotion_lambda_serve_url)
+    hostname = parsed_url.hostname
+
+    if not hostname:
+        logger.error(f"ERROR: Could not parse hostname from URL: {settings.remotion_lambda_serve_url}")
+        raise ValueError("Invalid REMOTION_LAMBDA_SERVE_URL format")
+
+    bucket = hostname.split(".")[0]
+    logger.info(f"_remotion_bucket: Extracted bucket={bucket} from hostname={hostname}")
+    logger.debug(f"_remotion_bucket: Full parsed URL - scheme={parsed_url.scheme}, netloc={parsed_url.netloc}")
+
+    return bucket
 
 
 async def _get_render_progress(render_id: str, bucket: str, settings) -> dict | None:
@@ -45,6 +50,12 @@ async def _get_render_progress(render_id: str, bucket: str, settings) -> dict | 
     """
     key = f"renders/{render_id}/progress.json"
     loop = asyncio.get_running_loop()
+
+    # 🔴 Problem Area 3: S3 client created with credentials
+    logger.debug(f"_get_render_progress: Fetching s3://{bucket}/{key}")
+    logger.debug(f"_get_render_progress: region={settings.remotion_lambda_region}")
+    logger.debug(f"_get_render_progress: AWS_ACCESS_KEY_ID={'***' if settings.aws_access_key_id else 'EMPTY'}")
+
     try:
         s3 = boto3.client(
             "s3",
@@ -52,38 +63,47 @@ async def _get_render_progress(render_id: str, bucket: str, settings) -> dict | 
             aws_access_key_id=settings.aws_access_key_id,
             aws_secret_access_key=settings.aws_secret_access_key,
         )
+        logger.debug(f"_get_render_progress: S3 client created successfully")
+
         response = await loop.run_in_executor(
             None, lambda: s3.get_object(Bucket=bucket, Key=key)
         )
-        return json.loads(response["Body"].read())
+        data = json.loads(response["Body"].read())
+        logger.debug(f"_get_render_progress: Successfully fetched progress for render_id={render_id}")
+        return data
+
     except Exception as e:
-        if "NoSuchKey" in str(e) or "404" in str(e):
+        error_str = str(e)
+        if "NoSuchKey" in error_str or "404" in error_str:
+            logger.debug(f"_get_render_progress: progress.json not yet available (render_id={render_id})")
             return None
-        logger.warning(f"S3 progress poll error (render_id={render_id}, bucket={bucket}): {type(e).__name__}: {e}")
+
+        # Log detailed error info for debugging
+        logger.warning(f"S3 progress poll error (render_id={render_id}, bucket={bucket}, key={key})")
+        logger.warning(f"  Error Type: {type(e).__name__}")
+        logger.warning(f"  Error Message: {error_str}")
+
+        # Check for specific error types
+        if "InvalidAccessKeyId" in error_str or "SignatureDoesNotMatch" in error_str:
+            logger.error("ERROR: AWS credentials are invalid or have wrong permissions!")
+        elif "NoCredentialProviders" in error_str:
+            logger.error("ERROR: AWS credentials not configured!")
+
         return None
 
 
 async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, settings) -> str:
     """
-    Invoke Remotion Lambda synchronously to get back the actual renderId,
-    then poll progress.json in S3 every 5s.
-    The 'start' handler returns in <1s after spawning child Lambdas.
+    Invoke Remotion Lambda using the Node.js SDK wrapper.
+    The SDK handles all props serialization/deserialization automatically.
     """
-    render_id = uuid.uuid4().hex[:21]
     bucket = _remotion_bucket(settings)
+    logger.info(f"[{job_id}] Invoking Remotion Lambda via SDK wrapper")
+    logger.info(f"[{job_id}] function={settings.remotion_lambda_function_name}, bucket={bucket}")
 
-    logger.info(f"[{job_id}] Invoking Remotion Lambda — function={settings.remotion_lambda_function_name} render_id={render_id}")
-
-    url = (
-        f"https://lambda.{settings.remotion_lambda_region}.amazonaws.com"
-        f"/2015-03-31/functions/{settings.remotion_lambda_function_name}/invocations"
-    )
-
+    # Build payload for Node.js wrapper
     lambda_payload = {
-        "type": "start",
-        "version": "4.0.443",
-        "renderId": render_id,
-        "bucketName": bucket,
+        "functionName": settings.remotion_lambda_function_name,
         "serveUrl": settings.remotion_lambda_serve_url,
         "composition": "CaptionVideo",
         "inputProps": props,
@@ -93,29 +113,69 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "framesPerLambda": settings.remotion_lambda_frames_per_lambda,
         "privacy": "private",
         "outName": f"renders/{request.project_id}/final.mp4",
+        "s3OutputBucket": bucket,
+        "s3OutputRegion": settings.remotion_lambda_region,
+        "region": settings.remotion_lambda_region,
     }
 
-    payload_bytes = json.dumps(lambda_payload).encode()
-    headers = _sign_request("POST", url, settings, "lambda", payload_bytes)
-    # Sync invocation — 'start' handler returns in <1s with the actual renderId
+    props_size = len(json.dumps(props))
+    logger.debug(f"[{job_id}] inputProps size: {props_size} bytes")
+    logger.debug(f"[{job_id}] inputProps: captions={len(props.get('captions', []))}, segments={len(props.get('segments', []))}")
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, content=payload_bytes, headers=headers)
-        if resp.status_code not in (200, 202):
-            raise RuntimeError(f"Lambda invocation failed: HTTP {resp.status_code} — {resp.text}")
+    # Write payload to temp file
+    loop = asyncio.get_running_loop()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(lambda_payload, f)
+        payload_file = f.name
+
+    try:
+        # Call Node.js wrapper script
+        remotion_dir = Path(__file__).parent.parent.parent / "remotion"
+        script_path = remotion_dir / "render-lambda.js"
+
+        logger.info(f"[{job_id}] Calling Node.js wrapper: {script_path}")
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["node", str(script_path), payload_file],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            ),
+        )
+
+        if result.returncode != 0:
+            logger.error(f"[{job_id}] Node.js wrapper failed:")
+            logger.error(f"[{job_id}] stderr: {result.stderr}")
+            logger.error(f"[{job_id}] stdout: {result.stdout}")
+            raise RuntimeError(f"Lambda invocation failed: {result.stderr}")
+
+        logger.debug(f"[{job_id}] Node.js wrapper output: {result.stdout[:500]}")
+        response_data = json.loads(result.stdout)
+
+        if not response_data.get("success"):
+            error = response_data.get("error", "Unknown error")
+            logger.error(f"[{job_id}] Lambda SDK error: {error}")
+            raise RuntimeError(f"Lambda render failed: {error}")
+
+        render_data = response_data.get("data", {})
+        render_id = render_data.get("renderId")
+
+        if not render_id:
+            logger.error(f"[{job_id}] No renderId returned from Lambda")
+            logger.error(f"[{job_id}] Response: {response_data}")
+            raise RuntimeError("Lambda returned no renderId")
+
+        logger.info(f"[{job_id}] ✅ Lambda accepted render — renderId={render_id}")
+        logger.info(f"[{job_id}] Starting progress polling (bucket={bucket}, render_id={render_id})")
+
+    finally:
+        # Cleanup temp file
         try:
-            resp_data = resp.json()
-            actual_id = resp_data.get("renderId")
-            actual_bucket = resp_data.get("bucketName")
-            if actual_id:
-                logger.info(f"[{job_id}] Lambda accepted render — actual renderId={actual_id} (requested={render_id})")
-                render_id = actual_id
-            if actual_bucket:
-                bucket = actual_bucket
-        except Exception:
-            pass  # no JSON body (202 async fallback), use our render_id
-
-    logger.info(f"[{job_id}] Polling progress every 5s (bucket={bucket}, render_id={render_id})")
+            Path(payload_file).unlink()
+        except Exception as e:
+            logger.debug(f"[{job_id}] Failed to delete temp file {payload_file}: {e}")
 
     # Poll S3 progress.json — max 5 min (60 × 5s)
     for attempt in range(60):
@@ -124,12 +184,14 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         progress = await _get_render_progress(render_id, bucket, settings)
 
         if progress is None:
-            logger.info(f"[{job_id}] [{attempt * 5}s] Waiting for Lambda to start...")
+            logger.info(f"[{job_id}] [{attempt * 5}s] Waiting for Lambda to start (attempt {attempt + 1}/60)...")
             continue
 
         if progress.get("fatalErrorEncountered"):
             errors = progress.get("errors", [])
             msg = errors[0].get("message", "unknown") if errors else "unknown"
+            logger.error(f"[{job_id}] ❌ FATAL ERROR from Lambda: {msg}")
+            logger.debug(f"[{job_id}] Full error details: {errors}")
             raise RuntimeError(f"Lambda render failed: {msg}")
 
         pct = int(progress.get("overallProgress", 0) * 100)
@@ -140,9 +202,13 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
 
         if progress.get("done"):
             s3_key = progress.get("outputFile") or f"renders/{request.project_id}/final.mp4"
-            logger.info(f"[{job_id}] Lambda render complete — s3_key={s3_key}")
+            logger.info(f"[{job_id}] ✅ Lambda render COMPLETE")
+            logger.info(f"[{job_id}] Output S3 key: {s3_key}")
+            logger.debug(f"[{job_id}] Full progress data: {progress}")
             return s3_key
 
+    logger.error(f"[{job_id}] ⏱️ TIMEOUT: Lambda render timed out after 5 minutes")
+    logger.error(f"[{job_id}] render_id={render_id}, bucket={bucket}")
     raise RuntimeError(f"Lambda render timed out after 5 minutes — render_id={render_id}")
 
 
