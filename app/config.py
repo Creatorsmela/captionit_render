@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     remotion_lambda_function_name: str = ""            # e.g. remotion-render-3-3-96-mem3009mb-disk2048mb-900sec
     remotion_lambda_serve_url: str = ""                # S3 site URL from: npx remotion lambda sites create
     remotion_lambda_region: str = "ap-south-1"
-    remotion_lambda_frames_per_lambda: int = 50
+    remotion_lambda_frames_per_lambda: int = 500
 
     class Config:
         env_file = ".env"
