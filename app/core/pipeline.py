@@ -97,10 +97,9 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
     Invoke Remotion Lambda using the Node.js SDK wrapper.
     The SDK handles all props serialization/deserialization automatically.
     """
-    # Progress polling uses the Remotion serve bucket
-    progress_bucket = _remotion_bucket(settings)
-    # Output bucket is the actual S3 bucket for rendered videos
+    # Both progress and output use the same bucket
     output_bucket = settings.aws_s3_bucket
+    progress_bucket = output_bucket  # Poll progress from the same bucket
     logger.info(f"[{job_id}] Invoking Remotion Lambda via SDK wrapper")
     logger.info(f"[{job_id}] function={settings.remotion_lambda_function_name}, output_bucket={output_bucket}, progress_bucket={progress_bucket}")
 
