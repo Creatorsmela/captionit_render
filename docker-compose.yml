@@ -1,15 +1,16 @@
 services:
-  render:
+  render-service:
     build: .
+    container_name: captionit-render
     ports:
-      - "800${RENDER_INSTANCE:-1}:8001"
+      - "8001:8001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - PORT=8001
+      - PORT=${PORT:-8001}
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - API_KEY=${API_KEY}
-      - MAX_CONCURRENT_RENDERS=${MAX_CONCURRENT_RENDERS:-10}
+      - MAX_CONCURRENT_RENDERS=${MAX_CONCURRENT_RENDERS:-50}
       - MAX_QUEUE_SIZE=${MAX_QUEUE_SIZE:-200}
       - REDIS_URL=${REDIS_URL}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
