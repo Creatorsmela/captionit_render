@@ -186,7 +186,10 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         progress = await _get_render_progress(render_id, progress_bucket, settings)
 
         if progress is None:
-            logger.info(f"[{job_id}] [{attempt * 5}s] Waiting for Lambda to start (attempt {attempt + 1}/60)...")
+            if attempt < 6:  # First 30 seconds - normal for Lambda cold start
+                logger.info(f"[{job_id}] [{attempt * 5}s] Waiting for progress.json (Lambda cold start, attempt {attempt + 1})...")
+            else:  # After 30 seconds - something is wrong
+                logger.warning(f"[{job_id}] [{attempt * 5}s] ⚠️ Progress not yet available (attempt {attempt + 1}/120) — Lambda may be stuck or S3 write failed")
             continue
 
         if progress.get("fatalErrorEncountered"):
