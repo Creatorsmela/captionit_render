@@ -177,8 +177,8 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         except Exception as e:
             logger.debug(f"[{job_id}] Failed to delete temp file {payload_file}: {e}")
 
-    # Poll S3 progress.json — max 5 min (60 × 5s)
-    for attempt in range(60):
+    # Poll S3 progress.json — max 10 min (120 × 5s)
+    for attempt in range(120):
         await asyncio.sleep(5)
 
         progress = await _get_render_progress(render_id, bucket, settings)
@@ -207,9 +207,9 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
             logger.debug(f"[{job_id}] Full progress data: {progress}")
             return s3_key
 
-    logger.error(f"[{job_id}] ⏱️ TIMEOUT: Lambda render timed out after 5 minutes")
+    logger.error(f"[{job_id}] ⏱️ TIMEOUT: Lambda render timed out after 10 minutes")
     logger.error(f"[{job_id}] render_id={render_id}, bucket={bucket}")
-    raise RuntimeError(f"Lambda render timed out after 5 minutes — render_id={render_id}")
+    raise RuntimeError(f"Lambda render timed out after 10 minutes — render_id={render_id}")
 
 
 async def run_pipeline(
