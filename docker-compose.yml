@@ -1,16 +1,15 @@
 services:
-  render-service:
+  render:
     build: .
-    container_name: captionit-render
     ports:
-      - "8001:8001"
+      - "800${RENDER_INSTANCE:-1}:8001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - PORT=${PORT:-8001}
+      - PORT=8001
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - API_KEY=${API_KEY}
-      - MAX_CONCURRENT_RENDERS=${MAX_CONCURRENT_RENDERS:-2}
+      - MAX_CONCURRENT_RENDERS=${MAX_CONCURRENT_RENDERS:-10}
       - MAX_QUEUE_SIZE=${MAX_QUEUE_SIZE:-200}
       - REDIS_URL=${REDIS_URL}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
@@ -22,4 +21,5 @@ services:
       - REMOTION_LAMBDA_FUNCTION_NAME=${REMOTION_LAMBDA_FUNCTION_NAME}
       - REMOTION_LAMBDA_SERVE_URL=${REMOTION_LAMBDA_SERVE_URL}
       - REMOTION_LAMBDA_REGION=${REMOTION_LAMBDA_REGION:-ap-south-1}
+      - REMOTION_LAMBDA_FRAMES_PER_LAMBDA=${REMOTION_LAMBDA_FRAMES_PER_LAMBDA:-50}
     restart: unless-stopped
