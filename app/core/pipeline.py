@@ -109,7 +109,9 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "composition": "CaptionVideo",
         "inputProps": props,
         "codec": "h264",
-        "imageFormat": "jpeg",
+        "imageFormat": "png",  # ← PNG (lossless) instead of JPEG for quality
+        "crf": 18,  # H264 quality: 0-51, lower = better. 18 = high quality visually lossless
+        "pixelFormat": "yuv420p",  # Standard H264 color format (prevents color shift)
         "maxRetries": 1,
         "framesPerLambda": settings.remotion_lambda_frames_per_lambda,
         "privacy": "private",
@@ -259,10 +261,22 @@ async def run_pipeline(
 
         # 2. Build props — Lambda fetches video directly from presigned URL
         caption_data = request.caption_data
+
+        # Handle max_height downscaling: if specified and less than original, downscale proportionally
+        render_width = width
+        render_height = height
+        if request.max_height and request.max_height < height:
+            scale_factor = request.max_height / height
+            render_height = request.max_height
+            render_width = int(width * scale_factor)
+            # Ensure width is even (required by h264 codec)
+            render_width = render_width if render_width % 2 == 0 else render_width - 1
+            logger.info(f"[{job_id}] Downscaling: {width}x{height} → {render_width}x{render_height}")
+
         props = {
             "videoSrc": request.video_url,
-            "width": width,
-            "height": height,
+            "width": render_width,
+            "height": render_height,
             "fps": round(fps, 6),
             "durationInFrames": int(math.ceil(duration * fps)),
             "captions":       caption_data.get("captions", []),
@@ -271,7 +285,7 @@ async def run_pipeline(
             "segment_styles": caption_data.get("segment_styles", {}),
             "word_styles":    caption_data.get("word_styles", {}),
         }
-        logger.info(f"[{job_id}] Props built ({len(props['captions'])} words, {len(props['segments'])} segments)")
+        logger.info(f"[{job_id}] Props built — {render_width}x{render_height}, {len(props['captions'])} words, {len(props['segments'])} segments")
 
         # 3. Invoke Remotion Lambda (async + poll)
         s3_key = await _render_with_lambda(job_id, request, props, settings)
