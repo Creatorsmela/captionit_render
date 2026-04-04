@@ -1,57 +1,81 @@
 import React from "react";
-import { loadFont as loadAnton } from "@remotion/google-fonts/Anton";
-import { loadFont as loadBangers } from "@remotion/google-fonts/Bangers";
-import { loadFont as loadBungee } from "@remotion/google-fonts/Bungee";
-import { loadFont as loadCormorantGaramond } from "@remotion/google-fonts/CormorantGaramond";
-import { loadFont as loadFredoka } from "@remotion/google-fonts/Fredoka";
-import { loadFont as loadInter } from "@remotion/google-fonts/Inter";
-import { loadFont as loadMontserrat } from "@remotion/google-fonts/Montserrat";
-import { loadFont as loadOswald } from "@remotion/google-fonts/Oswald";
-import { loadFont as loadPlayfairDisplay } from "@remotion/google-fonts/PlayfairDisplay";
-import { loadFont as loadPlusJakartaSans } from "@remotion/google-fonts/PlusJakartaSans";
-import { loadFont as loadPoppins } from "@remotion/google-fonts/Poppins";
 import { CaptionVideo } from "./components/CaptionVideo";
 import { defaultProps, TypedComposition } from "./utils/remotionUtils";
 
 type FontResult = { waitUntilDone: () => Promise<void> };
 
-// Call loadFont() at MODULE LEVEL so each Chromium rendering tab registers the font
-// CSS immediately when the bundle loads. Font SELECTION still comes from the API
-// (font-family in CSS). We just ensure the font files are available before rendering.
-const FONT_WAITERS: Record<string, () => Promise<void>> = {
-  "Anton": (loadAnton() as unknown as FontResult).waitUntilDone,
-  "Bangers": (loadBangers() as unknown as FontResult).waitUntilDone,
-  "Bungee": (loadBungee() as unknown as FontResult).waitUntilDone,
-  "Cormorant Garamond": (loadCormorantGaramond() as unknown as FontResult).waitUntilDone,
-  "Fredoka": (loadFredoka() as unknown as FontResult).waitUntilDone,
-  "Inter": (loadInter() as unknown as FontResult).waitUntilDone,
-  "Montserrat": (loadMontserrat() as unknown as FontResult).waitUntilDone,
-  "Oswald": (loadOswald() as unknown as FontResult).waitUntilDone,
-  "Playfair Display": (loadPlayfairDisplay() as unknown as FontResult).waitUntilDone,
-  "Plus Jakarta Sans": (loadPlusJakartaSans() as unknown as FontResult).waitUntilDone,
-  "Poppins": (loadPoppins() as unknown as FontResult).waitUntilDone,
-};
+// Cache for loaded fonts to avoid re-loading
+const fontLoadCache = new Map<string, Promise<void>>();
+
+/**
+ * Convert font display name to module name (e.g., "Dancing Script" → "DancingScript")
+ * Handles spaces, hyphens, and special characters
+ */
+function fontNameToModuleName(fontFamily: string): string {
+  return fontFamily
+    .split(/[\s-]+/)  // Split by spaces or hyphens
+    .map((word) => {
+      // Capitalize first letter of each word, lowercase rest
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join("");  // Join without spaces → camelCase
+}
+
+/**
+ * Dynamically load a Google Font and return promise that resolves when font is ready.
+ * Works with any Google Font from @remotion/google-fonts
+ */
+async function getDynamicFontLoader(fontFamily: string): Promise<() => Promise<void>> {
+  // Convert display name to module name (e.g., "Dancing Script" → "DancingScript")
+  const moduleName = fontNameToModuleName(fontFamily);
+
+  try {
+    // Dynamic import from @remotion/google-fonts/{ModuleName}
+    const module = await import(`@remotion/google-fonts/${moduleName}`);
+    const loadFont = module.loadFont;
+    const fontResult = loadFont() as unknown as FontResult;
+    return fontResult.waitUntilDone;
+  } catch (error) {
+    // Font not found, return no-op
+    return async () => {};
+  }
+}
+
+/**
+ * Get or load a font, with caching to avoid duplicate loads
+ */
+async function ensureFontLoaded(fontFamily: string): Promise<void> {
+  if (!fontFamily) return;
+
+  if (!fontLoadCache.has(fontFamily)) {
+    fontLoadCache.set(fontFamily, (async () => {
+      const loader = await getDynamicFontLoader(fontFamily);
+      await loader();
+    })());
+  }
+
+  await fontLoadCache.get(fontFamily);
+}
 
 export const RemotionRoot: React.FC = () => (
   <TypedComposition
     id="CaptionVideo"
     component={CaptionVideo}
     defaultProps={defaultProps}
-    durationInFrames={300}
-    fps={30}
-    width={1920}
-    height={1080}
+    durationInFrames={defaultProps.durationInFrames}
+    fps={defaultProps.fps}
+    width={defaultProps.width}
+    height={defaultProps.height}
     calculateMetadata={async ({ props }) => {
-      // Wait for the font specified by the API to finish downloading
+      // Dynamically load the font specified by the API
       const fontFamily = (props.styles as { font_family?: string })?.font_family ?? "Inter";
-      const waiter = FONT_WAITERS[fontFamily];
-      if (waiter) await waiter();
+      await ensureFontLoaded(fontFamily);
 
       return {
-        fps: props.fps,
-        width: props.width,
-        height: props.height,
-        durationInFrames: props.durationInFrames,
+        fps: props.fps ?? defaultProps.fps,
+        width: props.width ?? defaultProps.width,
+        height: props.height ?? defaultProps.height,
+        durationInFrames: props.durationInFrames ?? defaultProps.durationInFrames,
       };
     }}
   />
