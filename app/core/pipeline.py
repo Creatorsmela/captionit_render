@@ -97,9 +97,8 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
     Invoke Remotion Lambda using the Node.js SDK wrapper.
     The SDK handles all props serialization/deserialization automatically.
     """
-    # Both progress and output use the same bucket
     output_bucket = settings.aws_s3_bucket
-    progress_bucket = output_bucket  # Poll progress from the same bucket
+    progress_bucket = _remotion_bucket(settings)  # Remotion writes progress.json to its own Lambda bucket
     logger.info(f"[{job_id}] Invoking Remotion Lambda via SDK wrapper")
     logger.info(f"[{job_id}] function={settings.remotion_lambda_function_name}, output_bucket={output_bucket}, progress_bucket={progress_bucket}")
 
@@ -199,18 +198,45 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
             logger.debug(f"[{job_id}] Full error details: {errors}")
             raise RuntimeError(f"Lambda render failed: {msg}")
 
-        pct = int(progress.get("overallProgress", 0) * 100)
+        post_render = progress.get("postRenderData")
+        frames_rendered = progress.get("framesRendered", 0)
         chunks = progress.get("chunks", 0)
         lambdas = progress.get("lambdasInvoked", 0)
-        frames = progress.get("frames", 0)
-        logger.info(f"[{job_id}] [{attempt * 5}s] Rendering {pct}% — {frames} frames, {chunks} chunks, {lambdas} lambdas")
+        logger.info(f"[{job_id}] [{attempt * 5}s] Rendering — {frames_rendered} frames, {chunks} chunks, {lambdas} lambdas")
 
-        if progress.get("done"):
-            s3_key = progress.get("outputFile") or f"renders/{request.project_id}/final.mp4"
-            logger.info(f"[{job_id}] ✅ Lambda render COMPLETE")
-            logger.info(f"[{job_id}] Output S3 key: {s3_key}")
-            logger.debug(f"[{job_id}] Full progress data: {progress}")
-            return s3_key
+        # Remotion 4.x signals completion via postRenderData (no "done" key)
+        if post_render:
+            dest_key = f"renders/{request.project_id}/final.mp4"
+
+            # Output file lands in the Remotion Lambda bucket — copy it to our S3 bucket
+            output_url = post_render.get("outputFile", "")
+            logger.info(f"[{job_id}] ✅ Lambda render COMPLETE — outputFile={output_url}")
+            try:
+                parsed = urlparse(output_url)
+                path_parts = parsed.path.lstrip("/").split("/", 1)
+                src_bucket = path_parts[0]
+                src_key = path_parts[1] if len(path_parts) > 1 else ""
+                logger.info(f"[{job_id}] Copying s3://{src_bucket}/{src_key} → s3://{settings.aws_s3_bucket}/{dest_key}")
+                s3 = boto3.client(
+                    "s3",
+                    region_name=settings.remotion_lambda_region,
+                    aws_access_key_id=settings.aws_access_key_id,
+                    aws_secret_access_key=settings.aws_secret_access_key,
+                )
+                await loop.run_in_executor(
+                    None,
+                    lambda: s3.copy_object(
+                        CopySource={"Bucket": src_bucket, "Key": src_key},
+                        Bucket=settings.aws_s3_bucket,
+                        Key=dest_key,
+                    ),
+                )
+                logger.info(f"[{job_id}] ✅ Copied to s3://{settings.aws_s3_bucket}/{dest_key}")
+            except Exception as copy_err:
+                logger.error(f"[{job_id}] S3 copy failed: {copy_err}", exc_info=True)
+                raise RuntimeError(f"Failed to copy render output to output bucket: {copy_err}")
+
+            return dest_key
 
     logger.error(f"[{job_id}] ⏱️ TIMEOUT: Lambda render timed out after 10 minutes")
     logger.error(f"[{job_id}] render_id={render_id}, progress_bucket={progress_bucket}")

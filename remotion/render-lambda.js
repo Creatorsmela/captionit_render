@@ -35,7 +35,7 @@ const payload = JSON.parse(fs.readFileSync(payloadFile, "utf-8"));
 
     console.log(JSON.stringify({ success: true, data: result }));
   } catch (error) {
-    console.error(JSON.stringify({ success: false, error: error.message, stack: error.stack }));
+    console.log(JSON.stringify({ success: false, error: error.message, stack: error.stack }));
     process.exit(1);
   }
 })();

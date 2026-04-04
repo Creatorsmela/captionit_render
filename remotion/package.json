@@ -4,12 +4,12 @@
     "render": "npx remotion render src/index.ts CaptionVideo"
   },
   "dependencies": {
-    "@remotion/cli": "^4.0.441",
+    "@remotion/cli": "^4.0.443",
     "@remotion/google-fonts": "^4.0.443",
     "@remotion/lambda": "^4.0.443",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "remotion": "^4.0.441"
+    "remotion": "^4.0.443"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",

@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 # In Layer 2 (multi-container), use Redis hash instead for cross-container visibility
 _job_store: dict[str, RenderJob] = {}
 
+# Strong references — prevents Python 3.12 GC from collecting running tasks
+_worker_tasks: list[asyncio.Task] = []
+
 
 def update_job(job_id: str, patch: dict):
     if job_id in _job_store:
@@ -28,7 +31,8 @@ def register_job(job: RenderJob):
 async def start_workers(queue: AbstractJobQueue, settings):
     """Called once at startup — creates N permanent worker coroutines."""
     for i in range(settings.max_concurrent_renders):
-        asyncio.create_task(_worker(i, queue, settings))
+        task = asyncio.create_task(_worker(i, queue, settings))
+        _worker_tasks.append(task)  # hold strong reference
     logger.info(
         f"Started {settings.max_concurrent_renders} render workers "
         f"({'Redis' if settings.redis_url else 'Local'} queue)"
@@ -43,9 +47,20 @@ async def _worker(worker_id: int, queue: AbstractJobQueue, settings):
     from app.core.pipeline import run_pipeline
     logger.info(f"Worker {worker_id} ready")
     while True:
-        job_id, request = await queue.dequeue()   # blocks until job available
+        try:
+            job_id, request = await queue.dequeue()
+        except asyncio.CancelledError:
+            logger.info(f"Worker {worker_id} cancelled — shutting down")
+            return
+        except BaseException as e:
+            logger.error(f"Worker {worker_id} dequeue error: {e}", exc_info=True)
+            await asyncio.sleep(2)
+            continue
         logger.info(f"Worker {worker_id} picked up job {job_id}")
         try:
             await run_pipeline(job_id, request, settings, update_job)
+        except asyncio.CancelledError:
+            logger.warning(f"Worker {worker_id} cancelled mid-job {job_id}")
+            return
         except Exception as e:
             logger.error(f"Worker {worker_id} unhandled error on job {job_id}: {e}", exc_info=True)

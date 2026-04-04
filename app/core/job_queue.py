@@ -40,7 +40,7 @@ class LocalJobQueue(AbstractJobQueue):
     async def dequeue(self) -> tuple[str, RenderRequest]:
         return await self._q.get()
 
-    def qsize(self) -> int:
+    async def qsize(self) -> int:
         return self._q.qsize()
 
 
@@ -65,10 +65,14 @@ class RedisJobQueue(AbstractJobQueue):
         return True
 
     async def dequeue(self) -> tuple[str, RenderRequest]:
-        # BRPOP blocks until a job arrives — no polling, zero CPU waste
-        _, raw = await self._redis.brpop(self.QUEUE_KEY)
-        data = json.loads(raw)
-        return data["job_id"], RenderRequest(**data["request"])
+        # Poll with RPOP + sleep — simpler and more reliable than BRPOP
+        # across asyncio/connection-pool edge cases.
+        while True:
+            raw = await self._redis.rpop(self.QUEUE_KEY)
+            if raw is not None:
+                data = json.loads(raw)
+                return data["job_id"], RenderRequest(**data["request"])
+            await asyncio.sleep(0.5)
 
     async def qsize(self) -> int:
         return await self._redis.llen(self.QUEUE_KEY)

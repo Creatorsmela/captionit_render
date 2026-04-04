@@ -60,7 +60,7 @@ async def get_job_status(job_id: str, _=Depends(_verify_api_key)):
 async def health(req: Request):
     settings = get_settings()
     queue = req.app.state.queue
-    qsize = queue.qsize() if callable(queue.qsize) else "unknown"
+    qsize = await queue.qsize()
     return {
         "status": "ok",
         "queue_backend": "redis" if settings.redis_url else "local",
