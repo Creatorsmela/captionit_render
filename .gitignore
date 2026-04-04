@@ -1,0 +1,25 @@
+# Node dependencies
+lambda/process_render/node_modules/
+
+# Python built packages (installed deps for Lambda zip)
+lambda/submit_render/package/
+lambda/render_webhook/package/
+lambda/get_job/package/
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# SAM build artifacts
+.aws-sam/
+
+# Env and secrets
+.env
+*.pem
+
+# Lambda deployment zips
+*.zip

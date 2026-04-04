@@ -1,0 +1,33 @@
+# AWS SAM deployment configuration for captionit_render_serverless
+# Run:  sam build && sam deploy
+# First time: sam build && sam deploy --guided  (creates this file)
+
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "captionit-render-serverless"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+capabilities           = "CAPABILITY_IAM"
+confirm_changeset      = true
+resolve_s3             = true
+region                 = "ap-south-1"
+# s3_bucket is auto-created by SAM on first --guided deploy
+# parameter_overrides below — fill in your values before deploying
+
+parameter_overrides = [
+  "ApiKey=3ce56b8b1ebc30a5efbb169fede1fcc006f",
+  "CallbackHmacSecret=b4kNHOWMmf0Kz1QrNHBh",
+  "AwsS3Bucket=cpitcm",
+  "RemotionLambdaRegion=ap-south-1",
+  "RemotionLambdaServeUrl=https://remotionlambda-apsouth1-ysxu1xtptu.s3.ap-south-1.amazonaws.com/sites/captionit-render/index.html",
+  "RemotionLambdaFunction1080P=remotion-render-4-0-443-mem3008mb-disk2048mb-900sec",
+  "RemotionLambdaFunction720P=remotion-render-4-0-443-mem2048mb-disk2048mb-900sec",
+  "RemotionLambdaFunction360P=remotion-render-4-0-443-mem1024mb-disk2048mb-900sec",
+  "RemotionLambdaFramesPerLambda=150",
+]

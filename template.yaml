@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CaptionIT Serverless Render Service (standalone — does NOT affect captionit_render Docker app)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parameters — set via samconfig.toml or `sam deploy --guided`
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+  ApiKey:
+    Type: String
+    NoEcho: true
+    Description: Bearer token the backend sends in Authorization header
+  CallbackHmacSecret:
+    Type: String
+    NoEcho: true
+    Description: HMAC secret shared with backend for callback verification
+  AwsS3Bucket:
+    Type: String
+    Default: cpitcm
+    Description: S3 bucket where final rendered videos are stored
+  RemotionLambdaRegion:
+    Type: String
+    Default: ap-south-1
+  RemotionLambdaServeUrl:
+    Type: String
+    Description: REMOTION_LAMBDA_SERVE_URL — the S3 sites/ URL
+  RemotionLambdaFunction1080P:
+    Type: String
+    Default: remotion-render-4-0-443-mem3008mb-disk2048mb-900sec
+  RemotionLambdaFunction720P:
+    Type: String
+    Default: remotion-render-4-0-443-mem2048mb-disk2048mb-900sec
+  RemotionLambdaFunction360P:
+    Type: String
+    Default: remotion-render-4-0-443-mem1024mb-disk2048mb-900sec
+  RemotionLambdaFramesPerLambda:
+    Type: Number
+    Default: 150
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global defaults
+# ─────────────────────────────────────────────────────────────────────────────
+Globals:
+  Function:
+    Runtime: python3.12
+    MemorySize: 256
+    Timeout: 60
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        DYNAMODB_TABLE: !Ref RenderJobsTable
+        SQS_QUEUE_URL: !Ref RenderQueue
+        API_KEY: !Ref ApiKey
+        CALLBACK_HMAC_SECRET: !Ref CallbackHmacSecret
+        AWS_S3_BUCKET: !Ref AwsS3Bucket
+        REMOTION_LAMBDA_REGION: !Ref RemotionLambdaRegion
+        REMOTION_LAMBDA_SERVE_URL: !Ref RemotionLambdaServeUrl
+        REMOTION_LAMBDA_FUNCTION_1080P: !Ref RemotionLambdaFunction1080P
+        REMOTION_LAMBDA_FUNCTION_720P: !Ref RemotionLambdaFunction720P
+        REMOTION_LAMBDA_FUNCTION_360P: !Ref RemotionLambdaFunction360P
+        REMOTION_LAMBDA_FRAMES_PER_LAMBDA: !Ref RemotionLambdaFramesPerLambda
+        WEBHOOK_URL: !Sub "https://${RenderApi}.execute-api.${AWS::Region}.amazonaws.com"
+
+Resources:
+
+  # ── SQS ──────────────────────────────────────────────────────────────────────
+  RenderDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: captionit-render-dlq-v2
+      MessageRetentionPeriod: 1209600
+
+  RenderQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: captionit-render-queue-v2
+      VisibilityTimeout: 120
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RenderDLQ.Arn
+        maxReceiveCount: 3
+
+  # ── DynamoDB ──────────────────────────────────────────────────────────────────
+  RenderJobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: captionit-render-jobs-v2
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: render_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: project_id-index
+          KeySchema:
+            - AttributeName: project_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: render_id-index
+          KeySchema:
+            - AttributeName: render_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ── API Gateway HTTP API ───────────────────────────────────────────────────────
+  RenderApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      Description: CaptionIT Serverless Render API v2
+
+  # ── Lambda: submit-render ─────────────────────────────────────────────────────
+  SubmitRenderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: captionit-render-submit-v2
+      CodeUri: lambda/submit_render/
+      Handler: handler.lambda_handler
+      MemorySize: 128
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RenderJobsTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt RenderQueue.QueueName
+      Events:
+        SubmitJob:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RenderApi
+            Method: POST
+            Path: /jobs
+
+  # ── Lambda: get-job ───────────────────────────────────────────────────────────
+  GetJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: captionit-render-get-job-v2
+      CodeUri: lambda/get_job/
+      Handler: handler.lambda_handler
+      MemorySize: 128
+      Timeout: 10
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RenderJobsTable
+      Events:
+        GetJob:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RenderApi
+            Method: GET
+            Path: /jobs/{job_id}
+
+  # ── Lambda: render-webhook ────────────────────────────────────────────────────
+  RenderWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: captionit-render-webhook-v2
+      CodeUri: lambda/render_webhook/
+      Handler: handler.lambda_handler
+      MemorySize: 256
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RenderJobsTable
+        - S3CrudPolicy:
+            BucketName: !Ref AwsS3Bucket
+      Events:
+        RenderWebhook:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RenderApi
+            Method: POST
+            Path: /webhook/remotion-complete
+
+  # ── Lambda: process-render (Node.js, SQS-triggered) ─────────────────────────
+  ProcessRenderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: captionit-render-process-v2
+      CodeUri: lambda/process_render/
+      Handler: handler.handler
+      Runtime: nodejs22.x
+      MemorySize: 256
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RenderJobsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: "*"
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt RenderQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+  ApiUrl:
+    Description: "Set RENDER_SERVICE_URL in backend .env to this value"
+    Value: !Sub "https://${RenderApi}.execute-api.${AWS::Region}.amazonaws.com"
+  RenderQueueUrl:
+    Description: SQS queue URL
+    Value: !Ref RenderQueue
+  DynamoDbTable:
+    Description: DynamoDB table name
+    Value: !Ref RenderJobsTable

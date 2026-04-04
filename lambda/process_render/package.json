@@ -1,0 +1,11 @@
+{
+  "name": "captionit-process-render",
+  "version": "1.0.0",
+  "description": "SQS-triggered Lambda: invokes Remotion renderMediaOnLambda and stores render_id in DynamoDB",
+  "main": "handler.js",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
+    "@remotion/lambda": "4.0.443"
+  }
+}
