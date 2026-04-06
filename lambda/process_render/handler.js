@@ -21,36 +21,34 @@ const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET;
 const REMOTION_LAMBDA_REGION = process.env.REMOTION_LAMBDA_REGION || "ap-south-1";
 const REMOTION_LAMBDA_SERVE_URL = process.env.REMOTION_LAMBDA_SERVE_URL;
 
+// Only 2 supported quality presets: 1080p and 4k
+// 1080p → 3GB Lambda,  caps long side at 1920px
+// 4k    → 10GB Lambda, caps long side at 3840px
 const LAMBDA_FUNCTIONS = {
-  "360p":  process.env.REMOTION_LAMBDA_FUNCTION_360P  || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
-  "720p":  process.env.REMOTION_LAMBDA_FUNCTION_720P  || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
   "1080p": process.env.REMOTION_LAMBDA_FUNCTION_1080P,
-  "4k":    process.env.REMOTION_LAMBDA_FUNCTION_4K    || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
+  "4k":    process.env.REMOTION_LAMBDA_FUNCTION_4K || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
 };
 
-// framesPerLambda controls how many parallel Lambdas Remotion spawns.
-// Lower = more parallel Lambdas = faster render (at higher cost).
-// Formula: parallel_lambdas = totalFrames / framesPerLambda
+// Lower framesPerLambda = more parallel Lambdas = faster render.
 // For 1 min @ 30fps (1800 frames):
-//   360p:  1800/120 = 15 parallel Lambdas
-//   720p:  1800/100 = 18 parallel Lambdas
-//   1080p: 1800/80  = 22 parallel Lambdas
-//   4k:    1800/60  = 30 parallel Lambdas
+//   1080p: 1800/80 = 22 parallel Lambdas
+//   4k:    1800/60 = 30 parallel Lambdas
 const FRAMES_PER_LAMBDA = {
-  "360p":  120,
-  "720p":  100,
   "1080p": 80,
   "4k":    60,
 };
 
 // Concurrent browser tabs per renderer Lambda.
-// 4K: 4 tabs on 10GB Lambda (4 × 600MB = 2.4GB, safe).
-// Others: 2 tabs on 3GB Lambda (2 × 400MB = 800MB, safe).
+// 4K: 4 tabs on 10GB (4×600MB = 2.4GB). 1080p: 2 tabs on 3GB (2×400MB = 800MB).
 const CONCURRENCY_PER_LAMBDA = {
-  "360p":  2,
-  "720p":  2,
   "1080p": 2,
   "4k":    4,
+};
+
+// Max long-side dimension per quality. Preserves aspect ratio.
+const QUALITY_MAX_LONG_SIDE = {
+  "1080p": 1920,
+  "4k":    3840,
 };
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REMOTION_LAMBDA_REGION }));
@@ -108,11 +106,9 @@ exports.handler = async (event) => {
       console.warn(`[process-render] job=${job_id} | WARNING: width/height missing from backend payload — falling back to ${rawWidth}x${rawHeight}. Check backend ffprobe logs.`);
     }
 
-    // Scale down to the quality preset's max long-side dimension, preserving aspect ratio.
-    // This prevents OOM on the Lambda for high-res source videos.
-    // 4K uses a dedicated 10GB Lambda and is not scaled down.
-    // Quality caps: 1080p → 1920px, 720p → 1280px, 360p → 640px, 4k → 3840px
-    const QUALITY_MAX_LONG_SIDE = { "360p": 640, "720p": 1280, "1080p": 1920, "4k": 3840 };
+    // Scale to the quality preset's max long-side, preserving aspect ratio.
+    // 1080p: caps at 1920px (prevents OOM on 3GB Lambda with 4K source)
+    // 4k:    caps at 3840px (no scale-down for native 4K, blocks 8K+)
     const maxLongSide = QUALITY_MAX_LONG_SIDE[quality] || 1920;
     const longSide = Math.max(rawWidth, rawHeight);
     const scale = longSide > maxLongSide ? maxLongSide / longSide : 1;
@@ -139,9 +135,13 @@ exports.handler = async (event) => {
       word_styles,
     };
 
-    const functionName = LAMBDA_FUNCTIONS[quality] || LAMBDA_FUNCTIONS["1080p"];
-    const framesPerLambda = FRAMES_PER_LAMBDA[quality] || 150;
-    const outName = `renders/${project_id}/${quality}.mp4`;
+    const resolvedQuality = LAMBDA_FUNCTIONS[quality] ? quality : "1080p";
+    if (resolvedQuality !== quality) {
+      console.warn(`[process-render] job=${job_id} | Unknown quality "${quality}" — falling back to 1080p`);
+    }
+    const functionName = LAMBDA_FUNCTIONS[resolvedQuality];
+    const framesPerLambda = FRAMES_PER_LAMBDA[resolvedQuality];
+    const outName = `renders/${project_id}/${resolvedQuality}.mp4`;
 
     // Webhook config — Remotion calls this URL when the render completes.
     // Routes to the backend directly (no Lambda Function URL needed).
