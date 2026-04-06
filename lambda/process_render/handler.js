@@ -41,11 +41,11 @@ const FRAMES_PER_LAMBDA = {
 };
 
 // Concurrent browser tabs per renderer Lambda.
-// 1080p uses 3GB Lambda — 1 tab to avoid OOM (each tab ~1.5GB at 1080p).
-// 4k uses 10GB Lambda — 2 tabs safe (each tab ~2GB at 4K = 4GB total).
+// Account limited to 3008MB max — both presets use the same 3GB Lambda.
+// 1 tab per Lambda to avoid OOM. Speed comes from parallel Lambda count instead.
 const CONCURRENCY_PER_LAMBDA = {
   "1080p": 1,
-  "4k":    2,
+  "4k":    1,
 };
 
 // Max long-side dimension per quality. Preserves aspect ratio.
