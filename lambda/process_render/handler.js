@@ -28,9 +28,9 @@ const LAMBDA_FUNCTIONS = {
 };
 
 const FRAMES_PER_LAMBDA = {
-  "360p":  300,
-  "720p":  200,
-  "1080p": parseInt(process.env.REMOTION_LAMBDA_FRAMES_PER_LAMBDA || "150", 10),
+  "360p":  480,
+  "720p":  300,
+  "1080p": parseInt(process.env.REMOTION_LAMBDA_FRAMES_PER_LAMBDA || "240", 10),
 };
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REMOTION_LAMBDA_REGION }));
@@ -115,15 +115,20 @@ exports.handler = async (event) => {
         inputProps: props,
         codec: "h264",
         imageFormat: "jpeg",
+        jpegQuality: 80,
+        // Force output dimensions — ensures correct aspect ratio even if
+        // caption_data dimensions are missing for old projects
+        forceWidth: width,
+        forceHeight: height,
         maxRetries: 1,
         framesPerLambda,
+        // 2 threads per renderer Lambda = ~2x speed with no extra cost
+        concurrencyPerLambda: 2,
         privacy: "private",
         outName,
         s3OutputBucket: AWS_S3_BUCKET,
         s3OutputRegion: REMOTION_LAMBDA_REGION,
         region: REMOTION_LAMBDA_REGION,
-        // Allow up to 240s for Remotion Lambda cold start (3GB Lambda can take 60-90s cold).
-        // Our Lambda timeout is 300s so this leaves 60s margin.
         timeoutInMilliseconds: 240000,
         webhook,
       });
