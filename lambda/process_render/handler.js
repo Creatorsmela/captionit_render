@@ -28,16 +28,24 @@ const LAMBDA_FUNCTIONS = {
   "4k":    process.env.REMOTION_LAMBDA_FUNCTION_4K    || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
 };
 
+// framesPerLambda controls how many parallel Lambdas Remotion spawns.
+// Lower = more parallel Lambdas = faster render (at higher cost).
+// Formula: parallel_lambdas = totalFrames / framesPerLambda
+// For 1 min @ 30fps (1800 frames):
+//   360p:  1800/120 = 15 parallel Lambdas
+//   720p:  1800/100 = 18 parallel Lambdas
+//   1080p: 1800/80  = 22 parallel Lambdas
+//   4k:    1800/60  = 30 parallel Lambdas
 const FRAMES_PER_LAMBDA = {
-  "360p":  480,
-  "720p":  300,
-  "1080p": parseInt(process.env.REMOTION_LAMBDA_FRAMES_PER_LAMBDA || "150", 10),
-  "4k":    120,  // 120 frames × 4 concurrent = 30 serial rounds → fewer cold starts
+  "360p":  120,
+  "720p":  100,
+  "1080p": 80,
+  "4k":    60,
 };
 
 // Concurrent browser tabs per renderer Lambda.
-// 4K uses 4 concurrent on 10GB Lambda (each tab ~600MB = 2.4GB total, safe).
-// Other qualities use 2 (3GB Lambda has ~1.2GB headroom for 2 tabs).
+// 4K: 4 tabs on 10GB Lambda (4 × 600MB = 2.4GB, safe).
+// Others: 2 tabs on 3GB Lambda (2 × 400MB = 800MB, safe).
 const CONCURRENCY_PER_LAMBDA = {
   "360p":  2,
   "720p":  2,
