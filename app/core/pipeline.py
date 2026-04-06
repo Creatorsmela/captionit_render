@@ -262,14 +262,24 @@ async def run_pipeline(
         # 2. Build props — Lambda fetches video directly from presigned URL
         caption_data = request.caption_data
 
-        # Handle max_height downscaling: if specified and less than original, downscale proportionally
+        # Handle rendering dimensions: explicit dimensions take precedence over max_height fallback
         render_width = width
         render_height = height
-        if request.max_height and request.max_height < height:
+
+        if request.render_width and request.render_height:
+            # Use explicit dimensions sent by frontend (portrait-aware, no guessing)
+            render_width = request.render_width
+            render_height = request.render_height
+            # Ensure even pixels for h264
+            render_width = render_width if render_width % 2 == 0 else render_width - 1
+            render_height = render_height if render_height % 2 == 0 else render_height - 1
+            if render_width != width or render_height != height:
+                logger.info(f"[{job_id}] Scaling: {width}x{height} → {render_width}x{render_height}")
+        elif request.max_height and request.max_height < height:
+            # Legacy fallback: proportional downscale from max_height
             scale_factor = request.max_height / height
             render_height = request.max_height
             render_width = int(width * scale_factor)
-            # Ensure width is even (required by h264 codec)
             render_width = render_width if render_width % 2 == 0 else render_width - 1
             logger.info(f"[{job_id}] Downscaling: {width}x{height} → {render_width}x{render_height}")
 
