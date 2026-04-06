@@ -116,10 +116,6 @@ exports.handler = async (event) => {
         codec: "h264",
         imageFormat: "jpeg",
         jpegQuality: 80,
-        // Force output dimensions — ensures correct aspect ratio even if
-        // caption_data dimensions are missing for old projects
-        forceWidth: width,
-        forceHeight: height,
         maxRetries: 1,
         framesPerLambda,
         // 2 threads per renderer Lambda = ~2x speed with no extra cost
