@@ -1,4 +1,5 @@
 # Node dependencies
+node_modules/
 lambda/process_render/node_modules/
 
 # Python built packages (installed deps for Lambda zip)
