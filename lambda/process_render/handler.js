@@ -25,12 +25,14 @@ const LAMBDA_FUNCTIONS = {
   "360p":  process.env.REMOTION_LAMBDA_FUNCTION_360P  || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
   "720p":  process.env.REMOTION_LAMBDA_FUNCTION_720P  || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
   "1080p": process.env.REMOTION_LAMBDA_FUNCTION_1080P,
+  "4k":    process.env.REMOTION_LAMBDA_FUNCTION_4K    || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
 };
 
 const FRAMES_PER_LAMBDA = {
   "360p":  480,
   "720p":  300,
-  "1080p": parseInt(process.env.REMOTION_LAMBDA_FRAMES_PER_LAMBDA || "240", 10),
+  "1080p": parseInt(process.env.REMOTION_LAMBDA_FRAMES_PER_LAMBDA || "150", 10),
+  "4k":    60,   // fewer frames per chunk — each 4K frame is ~4× larger
 };
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REMOTION_LAMBDA_REGION }));
@@ -89,9 +91,10 @@ exports.handler = async (event) => {
     }
 
     // Scale down to the quality preset's max long-side dimension, preserving aspect ratio.
-    // This prevents OOM on the Lambda for high-res (4K) source videos.
-    // Quality caps: 1080p → 1920px, 720p → 1280px, 360p → 640px on the long side.
-    const QUALITY_MAX_LONG_SIDE = { "360p": 640, "720p": 1280, "1080p": 1920 };
+    // This prevents OOM on the Lambda for high-res source videos.
+    // 4K uses a dedicated 10GB Lambda and is not scaled down.
+    // Quality caps: 1080p → 1920px, 720p → 1280px, 360p → 640px, 4k → 3840px
+    const QUALITY_MAX_LONG_SIDE = { "360p": 640, "720p": 1280, "1080p": 1920, "4k": 3840 };
     const maxLongSide = QUALITY_MAX_LONG_SIDE[quality] || 1920;
     const longSide = Math.max(rawWidth, rawHeight);
     const scale = longSide > maxLongSide ? maxLongSide / longSide : 1;
@@ -141,8 +144,9 @@ exports.handler = async (event) => {
         jpegQuality: 80,
         maxRetries: 1,
         framesPerLambda,
-        // 2 threads per renderer Lambda = ~2x speed with no extra cost
-        concurrencyPerLambda: 2,
+        // 4K uses 1 thread (2 concurrent at 4K would exceed 10GB memory)
+        // All other qualities use 2 threads for ~2x speed at no extra cost
+        concurrencyPerLambda: quality === "4k" ? 1 : 2,
         privacy: "private",
         outName,
         s3OutputBucket: AWS_S3_BUCKET,
