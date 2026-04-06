@@ -76,11 +76,34 @@ exports.handler = async (event) => {
     const segment_styles = caption_data.segment_styles || {};
     const word_styles    = caption_data.word_styles    || {};
 
-    // video dimensions come from the caption_data or are detected client-side
-    const width           = caption_data.width           || 1920;
-    const height          = caption_data.height          || 1080;
+    // video dimensions — passed from backend (ffprobe at transcription or render time)
+    console.log(`[process-render] job=${job_id} project=${project_id} | received dimensions from backend: width=${caption_data.width} height=${caption_data.height} fps=${caption_data.fps} durationInFrames=${caption_data.durationInFrames} duration=${caption_data.duration}`);
+
+    const rawWidth  = caption_data.width  || 1920;
+    const rawHeight = caption_data.height || 1080;
     const fps             = caption_data.fps             || 30;
     const durationInFrames = caption_data.durationInFrames || Math.ceil((caption_data.duration || 60) * fps);
+
+    if (!caption_data.width || !caption_data.height) {
+      console.warn(`[process-render] job=${job_id} | WARNING: width/height missing from backend payload — falling back to ${rawWidth}x${rawHeight}. Check backend ffprobe logs.`);
+    }
+
+    // Scale down to the quality preset's max long-side dimension, preserving aspect ratio.
+    // This prevents OOM on the Lambda for high-res (4K) source videos.
+    // Quality caps: 1080p → 1920px, 720p → 1280px, 360p → 640px on the long side.
+    const QUALITY_MAX_LONG_SIDE = { "360p": 640, "720p": 1280, "1080p": 1920 };
+    const maxLongSide = QUALITY_MAX_LONG_SIDE[quality] || 1920;
+    const longSide = Math.max(rawWidth, rawHeight);
+    const scale = longSide > maxLongSide ? maxLongSide / longSide : 1;
+    // H264 requires even dimensions — round to nearest even number
+    const width  = Math.round(rawWidth  * scale / 2) * 2;
+    const height = Math.round(rawHeight * scale / 2) * 2;
+
+    if (scale < 1) {
+      console.log(`[process-render] job=${job_id} | Scaled ${rawWidth}x${rawHeight} → ${width}x${height} (${quality} cap: ${maxLongSide}px long side, scale=${scale.toFixed(3)})`);
+    }
+
+    console.log(`[process-render] job=${job_id} | FINAL props for Remotion: width=${width} height=${height} fps=${fps} durationInFrames=${durationInFrames} quality=${quality} functionName=${LAMBDA_FUNCTIONS[quality] || LAMBDA_FUNCTIONS["1080p"]}`);
 
     const props = {
       videoSrc: video_url,
@@ -140,11 +163,14 @@ exports.handler = async (event) => {
     }
 
     const renderId = result.renderId;
-    console.log(`Job ${job_id} accepted by Remotion — renderId=${renderId}`);
+    const bucketName = result.bucketName;
+    console.log(`Job ${job_id} accepted by Remotion — renderId=${renderId} bucket=${bucketName}`);
 
     await updateJob(job_id, {
       status: "rendering",
       render_id: renderId,
+      remotion_bucket: bucketName,
+      function_name: functionName,
     });
     // SQS auto-acks on success. Remotion will call the webhook when done.
   }
