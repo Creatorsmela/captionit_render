@@ -32,7 +32,17 @@ const FRAMES_PER_LAMBDA = {
   "360p":  480,
   "720p":  300,
   "1080p": parseInt(process.env.REMOTION_LAMBDA_FRAMES_PER_LAMBDA || "150", 10),
-  "4k":    60,   // fewer frames per chunk — each 4K frame is ~4× larger
+  "4k":    120,  // 120 frames × 4 concurrent = 30 serial rounds → fewer cold starts
+};
+
+// Concurrent browser tabs per renderer Lambda.
+// 4K uses 4 concurrent on 10GB Lambda (each tab ~600MB = 2.4GB total, safe).
+// Other qualities use 2 (3GB Lambda has ~1.2GB headroom for 2 tabs).
+const CONCURRENCY_PER_LAMBDA = {
+  "360p":  2,
+  "720p":  2,
+  "1080p": 2,
+  "4k":    4,
 };
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REMOTION_LAMBDA_REGION }));
@@ -141,12 +151,11 @@ exports.handler = async (event) => {
         inputProps: props,
         codec: "h264",
         imageFormat: "jpeg",
-        jpegQuality: 80,
+        // 4K: quality 70 is indistinguishable at that resolution but 30% faster I/O
+        jpegQuality: quality === "4k" ? 70 : 80,
         maxRetries: 1,
         framesPerLambda,
-        // 4K uses 1 thread (2 concurrent at 4K would exceed 10GB memory)
-        // All other qualities use 2 threads for ~2x speed at no extra cost
-        concurrencyPerLambda: quality === "4k" ? 1 : 2,
+        concurrencyPerLambda: CONCURRENCY_PER_LAMBDA[quality] || 2,
         privacy: "private",
         outName,
         s3OutputBucket: AWS_S3_BUCKET,
