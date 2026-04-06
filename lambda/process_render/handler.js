@@ -41,10 +41,10 @@ const FRAMES_PER_LAMBDA = {
 };
 
 // Concurrent browser tabs per renderer Lambda.
-// Must not exceed available CPU cores on the Lambda.
-// Both 3GB and 10GB Remotion Lambdas have 2 vCPUs.
+// 1080p uses 3GB Lambda — 1 tab to avoid OOM (each tab ~1.5GB at 1080p).
+// 4k uses 10GB Lambda — 2 tabs safe (each tab ~2GB at 4K = 4GB total).
 const CONCURRENCY_PER_LAMBDA = {
-  "1080p": 2,
+  "1080p": 1,
   "4k":    2,
 };
 
