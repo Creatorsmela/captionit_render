@@ -31,11 +31,13 @@ const LAMBDA_FUNCTIONS = {
 
 // Lower framesPerLambda = more parallel Lambdas = faster render.
 // For 1 min @ 30fps (1800 frames):
-//   1080p: 1800/80 = 22 parallel Lambdas
-//   4k:    1800/60 = 30 parallel Lambdas
+//   1080p: 1800/40 = 45 parallel Lambdas
+//   4k:    1800/20 = 90 parallel Lambdas
+// 4K gets very low framesPerLambda to compensate for the 2 vCPU limit.
+// Minimum ~15 frames to avoid cold-start overhead dominating render time.
 const FRAMES_PER_LAMBDA = {
-  "1080p": 80,
-  "4k":    60,
+  "1080p": 40,
+  "4k":    20,
 };
 
 // Concurrent browser tabs per renderer Lambda.
