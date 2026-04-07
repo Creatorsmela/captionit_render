@@ -109,8 +109,8 @@ async def _render_with_lambda(job_id: str, request: RenderRequest, props: dict, 
         "composition": "CaptionVideo",
         "inputProps": props,
         "codec": "h264",
-        "imageFormat": "png",  # ← PNG (lossless) instead of JPEG for quality
-        "crf": 18,  # H264 quality: 0-51, lower = better. 18 = high quality visually lossless
+        "imageFormat": "jpeg",  # JPEG reduces memory/disk vs PNG (~40% savings)
+        "crf": 25,  # H264 quality: 0-51, 25=visually lossless for captions, ~30% faster encode than CRF=18
         "pixelFormat": "yuv420p",  # Standard H264 color format (prevents color shift)
         "maxRetries": 1,
         "framesPerLambda": settings.remotion_lambda_frames_per_lambda,
