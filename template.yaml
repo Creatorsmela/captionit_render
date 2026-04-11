@@ -27,15 +27,10 @@ Parameters:
   RemotionLambdaFunction1080P:
     Type: String
     Default: remotion-render-4-0-443-mem3008mb-disk2048mb-900sec
-  RemotionLambdaFunction720P:
+  RemotionLambdaFunction4K:
     Type: String
-    Default: remotion-render-4-0-443-mem2048mb-disk2048mb-900sec
-  RemotionLambdaFunction360P:
-    Type: String
-    Default: remotion-render-4-0-443-mem1024mb-disk2048mb-900sec
-  RemotionLambdaFramesPerLambda:
-    Type: Number
-    Default: 150
+    Default: remotion-render-4-0-443-mem10000mb-disk10240mb-900sec
+    Description: Remotion Lambda for 4K renders (10 GB memory)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Global defaults
@@ -57,9 +52,7 @@ Globals:
         REMOTION_LAMBDA_REGION: !Ref RemotionLambdaRegion
         REMOTION_LAMBDA_SERVE_URL: !Ref RemotionLambdaServeUrl
         REMOTION_LAMBDA_FUNCTION_1080P: !Ref RemotionLambdaFunction1080P
-        REMOTION_LAMBDA_FUNCTION_720P: !Ref RemotionLambdaFunction720P
-        REMOTION_LAMBDA_FUNCTION_360P: !Ref RemotionLambdaFunction360P
-        REMOTION_LAMBDA_FRAMES_PER_LAMBDA: !Ref RemotionLambdaFramesPerLambda
+        REMOTION_LAMBDA_FUNCTION_4K: !Ref RemotionLambdaFunction4K
         WEBHOOK_URL: !Sub "https://${RenderApi}.execute-api.${AWS::Region}.amazonaws.com"
 
 Resources:
@@ -75,7 +68,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: captionit-render-queue-v2
-      VisibilityTimeout: 120
+      VisibilityTimeout: 360  # must be >= 6x Lambda Timeout (60s)
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt RenderDLQ.Arn
         maxReceiveCount: 3
@@ -201,7 +194,9 @@ Resources:
             - Effect: Allow
               Action:
                 - lambda:InvokeFunction
-              Resource: "*"
+              Resource:
+                - !Sub "arn:aws:lambda:${RemotionLambdaRegion}:${AWS::AccountId}:function:${RemotionLambdaFunction1080P}"
+                - !Sub "arn:aws:lambda:${RemotionLambdaRegion}:${AWS::AccountId}:function:${RemotionLambdaFunction4K}"
       Events:
         SQSTrigger:
           Type: SQS

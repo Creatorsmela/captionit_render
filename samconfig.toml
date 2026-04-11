@@ -20,14 +20,18 @@ region                 = "ap-south-1"
 # s3_bucket is auto-created by SAM on first --guided deploy
 # parameter_overrides below — fill in your values before deploying
 
+# SECRETS — do NOT commit real values here.
+# Set these via environment variables before deploying:
+#   export CAPTIONIT_API_KEY=<your-api-key>
+#   export CAPTIONIT_HMAC_SECRET=<your-hmac-secret>
+# Then reference them below with ${CAPTIONIT_API_KEY} syntax,
+# or pass them at deploy time: sam deploy --parameter-overrides ApiKey=xxx CallbackHmacSecret=yyy
 parameter_overrides = [
-  "ApiKey=3ce56b8b1ebc30a5efbb169fede1fcc006f",
-  "CallbackHmacSecret=b4kNHOWMmf0Kz1QrNHBh",
+  "ApiKey=REPLACE_ME",
+  "CallbackHmacSecret=REPLACE_ME",
   "AwsS3Bucket=cpitcm",
   "RemotionLambdaRegion=ap-south-1",
   "RemotionLambdaServeUrl=https://remotionlambda-apsouth1-ysxu1xtptu.s3.ap-south-1.amazonaws.com/sites/captionit-render/index.html",
   "RemotionLambdaFunction1080P=remotion-render-4-0-443-mem3008mb-disk2048mb-900sec",
-  "RemotionLambdaFunction720P=remotion-render-4-0-443-mem2048mb-disk2048mb-900sec",
-  "RemotionLambdaFunction360P=remotion-render-4-0-443-mem1024mb-disk2048mb-900sec",
-  "RemotionLambdaFramesPerLambda=150",
+  "RemotionLambdaFunction4K=remotion-render-4-0-443-mem10000mb-disk10240mb-900sec",
 ]

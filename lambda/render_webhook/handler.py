@@ -39,13 +39,15 @@ def _response(status_code: int, body: dict) -> dict:
 
 
 def _verify_remotion_signature(body_bytes: bytes, received_sig: str) -> bool:
-    """Verify Remotion webhook HMAC-SHA512 signature."""
-    # Remotion uses HMAC-SHA512 for webhook signatures
-    expected = hmac.new(
+    """Verify Remotion webhook HMAC-SHA512 signature.
+    Remotion sends the header as: X-Remotion-Signature: sha512=<hex>
+    """
+    digest = hmac.new(
         CALLBACK_HMAC_SECRET.encode(),
         body_bytes,
         hashlib.sha512,
     ).hexdigest()
+    expected = f"sha512={digest}"
     try:
         return hmac.compare_digest(received_sig, expected)
     except Exception:

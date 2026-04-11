@@ -13,9 +13,10 @@ const { DynamoDBDocumentClient, UpdateCommand } = require("@aws-sdk/lib-dynamodb
 const { renderMediaOnLambda } = require("@remotion/lambda");
 
 const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE;
-// BACKEND_URL: base URL of the CaptionIT backend (e.g. https://captions.example.com)
-// Remotion will POST to {BACKEND_URL}/api/v1/webhook/remotion-complete on completion.
-const BACKEND_URL = process.env.BACKEND_URL;
+// WEBHOOK_URL: this render service's own API Gateway base URL (injected by template.yaml).
+// Remotion will POST to {WEBHOOK_URL}/webhook/remotion-complete → render_webhook Lambda,
+// which then fires the stored callback_url back to the CaptionIT backend.
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const CALLBACK_HMAC_SECRET = process.env.CALLBACK_HMAC_SECRET;
 const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET;
 const REMOTION_LAMBDA_REGION = process.env.REMOTION_LAMBDA_REGION || "ap-south-1";
@@ -26,7 +27,7 @@ const REMOTION_LAMBDA_SERVE_URL = process.env.REMOTION_LAMBDA_SERVE_URL;
 // 4k    → 10GB Lambda, caps long side at 3840px
 const LAMBDA_FUNCTIONS = {
   "1080p": process.env.REMOTION_LAMBDA_FUNCTION_1080P,
-  "4k":    process.env.REMOTION_LAMBDA_FUNCTION_4K || process.env.REMOTION_LAMBDA_FUNCTION_1080P,
+  "4k":    process.env.REMOTION_LAMBDA_FUNCTION_4K,
 };
 
 // Lower framesPerLambda = more parallel Lambdas = faster render.
@@ -146,10 +147,11 @@ exports.handler = async (event) => {
     const framesPerLambda = FRAMES_PER_LAMBDA[resolvedQuality];
     const outName = `renders/${project_id}/${resolvedQuality}.mp4`;
 
-    // Webhook config — Remotion calls this URL when the render completes.
-    // Routes to the backend directly (no Lambda Function URL needed).
-    const webhook = BACKEND_URL ? {
-      url: `${BACKEND_URL}/api/v1/webhook/remotion-complete`,
+    // Webhook config — Remotion POSTs to render_webhook Lambda when the render completes.
+    // render_webhook Lambda verifies the HMAC, updates DynamoDB, copies S3, then fires
+    // the stored callback_url back to the CaptionIT backend.
+    const webhook = WEBHOOK_URL ? {
+      url: `${WEBHOOK_URL}/webhook/remotion-complete`,
       secret: CALLBACK_HMAC_SECRET,
     } : undefined;
 
