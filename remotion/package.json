@@ -1,0 +1,19 @@
+{
+  "scripts": {
+    "preview": "npx remotion preview src/index.ts",
+    "render": "npx remotion render src/index.ts CaptionVideo"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.443",
+    "@remotion/google-fonts": "^4.0.443",
+    "@remotion/lambda": "^4.0.443",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.443"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.2"
+  }
+}
